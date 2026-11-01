@@ -120,7 +120,9 @@ def context_for_title(store,title,now):
 
 def required_title_tokens(text):
     if not re.search('[\u0400-\u04ff]',text):return []
-    tokens=re.findall(r'(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9-]*',text)
+    # A separator is part of a model/size only when followed by ASCII text.
+    # In S/M/L-кодов the hyphen joins a Russian suffix, not the size token.
+    tokens=re.findall(r'(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*(?:[-/&][A-Za-z0-9]+)*',text)
     return [t for t in tokens if len(t)>=2 and (any(c.isdigit() for c in t) or t.isupper() or t[0].isupper())]
 
 

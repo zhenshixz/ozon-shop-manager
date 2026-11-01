@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [混合语言标题规格校验修复](../MAINTENANCE-20261101-TITLE-TOKEN-BOUNDARY.md)
 - [GitHub产品介绍与亮点补充](../MAINTENANCE-20261101-README-HIGHLIGHTS.md)
 - [Gemini最新罗盘UI优化](../MAINTENANCE-20261101-COMPASS-UI.md)
 - [自动核算选档及轻小件17%费率](../MAINTENANCE-20261101-AUTO-TARIFF.md)

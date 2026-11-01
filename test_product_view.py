@@ -232,6 +232,18 @@ class ProductViewTest(unittest.TestCase):
         self.assertEqual(titles.validate_title_specs('Бейсболка','“棒球帽”'),'棒球帽')
 
 
+    def test_mixed_title_sizes_do_not_include_russian_suffix_hyphen(self):
+        source='DUNU S&S Eartips, Сменные силиконовые затычки для ушей для наушников, Содержит 1 пары S/M/L-кодов'
+        result='DUNU S&S Eartips，耳机用可更换的硅胶耳塞，包含1对S/M/L代码'
+        self.assertEqual(titles.required_title_tokens(source),['DUNU','S&S','Eartips','S/M/L'])
+        self.assertEqual(titles.validate_title_specs(source,result),result)
+        for invalid in (result.replace('1对','2对'),result.replace('S/M/L','S/M'),result.replace('DUNU','其他品牌')):
+            with self.subTest(invalid=invalid),self.assertRaisesRegex(titles.TranslationError,'specification-mismatch'):
+                titles.validate_title_specs(source,invalid)
+        self.assertEqual(titles.required_title_tokens('Тренажер JSQ-050-модель'),['JSQ-050'])
+        with self.assertRaisesRegex(titles.TranslationError,'specification-mismatch'):
+            titles.validate_title_specs('Тренажер JSQ-050-модель','训练器 JSQ-051')
+
     def test_local_model_uses_loopback_and_validates_specs(self):
         source='Тренажер для шеи JSQ-050'
         class Response:
