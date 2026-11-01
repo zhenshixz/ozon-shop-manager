@@ -1,0 +1,27 @@
+config.json
+data/
+__pycache__/
+*.pyc
+.env
+*.zip
+
+# Local archive: credentials and runtime files must stay out of Git.
+/profit-web.json
+/title-translation.json
+**/__pycache__/
+*.pyo
+*.sqlite*
+*.db
+*.log
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+/id_ed25519*
+/id_rsa*
+/.server-access/
+/.venv/
+/venv/
+/node_modules/
+/*.tar.gz

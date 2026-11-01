@@ -1,0 +1,6 @@
+{
+  "provider": "siliconflow",
+  "model": "tencent/Hunyuan-MT-7B",
+  "api_key": "",
+  "daily_character_budget": 20000
+}

@@ -1,0 +1,21 @@
+# Reference template for a new server. Existing production units stay unchanged.
+[Unit]
+Description=OZON Shop Manager profit web and analytics
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/ozon-push-monitor/profit-web.json
+
+[Service]
+Type=simple
+User=ozon-monitor
+Group=ozon-monitor
+WorkingDirectory=/opt/ozon-push-monitor
+ExecStart=/opt/ozon-profit-runtime/bin/gunicorn --workers 1 --threads 2 --bind 127.0.0.1:5310 --timeout 30 --access-logfile /dev/null --error-logfile - profit_web:create_app()
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Shanghai
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+{
+  "database": "/opt/ozon-push-monitor/data/monitor.sqlite3",
+  "access_token": "REPLACE_WITH_RANDOM_ACCESS_TOKEN",
+  "secret_key": "REPLACE_WITH_RANDOM_FLASK_SECRET",
+  "public_base_url": "https://YOUR_DOMAIN/ozon-profit",
+  "secure_cookie": true,
+  "public_access": true,
+  "operating_start_date": "2026-10-24"
+}

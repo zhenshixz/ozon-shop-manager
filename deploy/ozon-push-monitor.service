@@ -1,0 +1,28 @@
+[Unit]
+Description=Ozon new product and order notifications
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/opt/ozon-push-monitor/config.json
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ozon-monitor
+Group=ozon-monitor
+WorkingDirectory=/opt/ozon-push-monitor
+ExecStart=/usr/bin/python3.11 /opt/ozon-push-monitor/monitor.py run
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONUTF8=1
+Environment=TZ=Asia/Shanghai
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ozon-push-monitor/data
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

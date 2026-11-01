@@ -1,0 +1,30 @@
+{
+  "poll_seconds": 300,
+  "product_poll_seconds": 900,
+  "order_push_seconds": 300,
+  "product_digest_hour": 22,
+  "order_overlap_seconds": 900,
+  "workers": 3,
+  "http_timeout_seconds": 20,
+  "order_lookback_hours": 48,
+  "data_dir": "data",
+  "pushplus": {
+    "token": "",
+    "topic": "",
+    "secret_key": "",
+    "min_send_interval_seconds": 13,
+    "daily_request_budget": 180
+  },
+  "shops": [
+    {"id": "shop01", "name": "店铺1", "enabled": true, "client_id": "", "api_key": ""},
+    {"id": "shop02", "name": "店铺2", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop03", "name": "店铺3", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop04", "name": "店铺4", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop05", "name": "店铺5", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop06", "name": "店铺6", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop07", "name": "店铺7", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop08", "name": "店铺8", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop09", "name": "店铺9", "enabled": false, "client_id": "", "api_key": ""},
+    {"id": "shop10", "name": "店铺10", "enabled": false, "client_id": "", "api_key": ""}
+  ]
+}

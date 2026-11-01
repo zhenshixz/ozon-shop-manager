@@ -1,0 +1,291 @@
+{
+  "exported_at": "2026-11-01T08:48:02.887705+00:00",
+  "source_directory": "/opt/ozon-push-monitor",
+  "excluded": [
+    "config.json",
+    "profit-web.json",
+    "title-translation.json",
+    "data/",
+    "__pycache__/",
+    "*.sqlite*",
+    "*.log",
+    "SSH keys"
+  ],
+  "files": [
+    {
+      "path": ".dockerignore",
+      "bytes": 26,
+      "sha256": "0e5b8d0a32de45799bb56b89edcb601b1a6196f6fe84d760c286586c088074e5"
+    },
+    {
+      "path": ".gitignore",
+      "bytes": 48,
+      "sha256": "ca503ffae344d66baff8e2f52ee3c18d5e98897b58778ab942230cc4d2956825"
+    },
+    {
+      "path": "Dockerfile",
+      "bytes": 264,
+      "sha256": "3a4c0c6d5c423d5cf0955a5ddc289a23607ff3a61e9d8e33de7e9f2eb35cde2e"
+    },
+    {
+      "path": "FREE-TITLE-API-REVIEW-20261030.md",
+      "bytes": 2703,
+      "sha256": "6bff12335e4ba5d4be0c6dc1842ec30a1f64ab6be76c14a5da37480f850b75da"
+    },
+    {
+      "path": "HANDOFF-GEMINI.md",
+      "bytes": 6354,
+      "sha256": "de669e32e7d598569a07a5eec7c0026145b23d0648ebd55188a5128071abd3ae"
+    },
+    {
+      "path": "MAINTENANCE-20261026.md",
+      "bytes": 4232,
+      "sha256": "04fb63942869d9228e18f8aaf143a66a07732a0144d55dd5d48b5334d24d466a"
+    },
+    {
+      "path": "MAINTENANCE-20261028.md",
+      "bytes": 11413,
+      "sha256": "7c783867979de4d378f0566f94203cd700577db9340fe2e7e0db80262f876fec"
+    },
+    {
+      "path": "MAINTENANCE-20261030.md",
+      "bytes": 4435,
+      "sha256": "5910eebd40abddb04e78aa6a0730cb72102f28a87041b24f95808a54e1869659"
+    },
+    {
+      "path": "MAINTENANCE-20261031-COST-IMAGES.md",
+      "bytes": 8187,
+      "sha256": "52d3fe5b51421664736eac3f08f4b4534e1b0d1d917e8b4df5fb2c9826730d0b"
+    },
+    {
+      "path": "MAINTENANCE-20261031-FIVE-STATS.md",
+      "bytes": 1463,
+      "sha256": "a24d45af5411f9f242ffc7491538bc47b82658d12220c59533f4a70bff48a28b"
+    },
+    {
+      "path": "MAINTENANCE-20261031-LOCAL-TITLES.md",
+      "bytes": 5691,
+      "sha256": "bf4142ef73a1985a6e5bd6f811297ca2d50c231372d3f33bd5cae84b7c19ab26"
+    },
+    {
+      "path": "MAINTENANCE-20261031-PUBLIC-ACCESS.md",
+      "bytes": 1183,
+      "sha256": "165b7fbaf8906d50cde6d3ba28b1e448b3b2c243855f21442dc59c15b67b28ed"
+    },
+    {
+      "path": "MAINTENANCE-20261031-PUSH-DETAILS.md",
+      "bytes": 2162,
+      "sha256": "fbd1bcdb5f1f97754c74c7a2a4be5b228a94f141eff084af5e0b332582c80031"
+    },
+    {
+      "path": "MAINTENANCE-20261101-AUTO-TARIFF.md",
+      "bytes": 2286,
+      "sha256": "9c3b4a8c68076e54ff188c6bdb51c39efa279f60a26a940f35d5620421ccf556"
+    },
+    {
+      "path": "MAINTENANCE-20261101-COMPASS-UI.md",
+      "bytes": 5476,
+      "sha256": "8946836af0107398cf7e1c6e6a3ba7e270ef71dd45fc960f2af29846d97af026"
+    },
+    {
+      "path": "MAINTENANCE-20261101-COMPASS.md",
+      "bytes": 2253,
+      "sha256": "9186043747f6baf253cca11f2b35e8b4a546b10e70e4bef4bdee6508080d8204"
+    },
+    {
+      "path": "MAINTENANCE-20261101-GEMINI-HANDOFF.md",
+      "bytes": 390,
+      "sha256": "56091b0a78d20b53402c46885b94fe1567bfd7b529e1a6ef66f534add9cd07de"
+    },
+    {
+      "path": "MAINTENANCE-20261101-PROFIT-CONTROL.md",
+      "bytes": 616,
+      "sha256": "83dce5bfbc5766ec5a20afaf28ad656b0f62493ed6e1e24807ab1ff8b605147d"
+    },
+    {
+      "path": "MAINTENANCE-20261101-SHOP-DIMENSION.md",
+      "bytes": 1401,
+      "sha256": "264ae44ec73b6f5794a32d80e882cbfbfc388b1363c16526c390ba381a405c78"
+    },
+    {
+      "path": "MAINTENANCE-20261101-SHOP-DRILL.md",
+      "bytes": 1222,
+      "sha256": "d7aca977f8c7511f54544582eb0ff8754413f3e411914fa4fcbf89c25183a24c"
+    },
+    {
+      "path": "MAINTENANCE-20261101-UNIT-PROFIT.md",
+      "bytes": 838,
+      "sha256": "633b939c6355f6565c8c09bac1dabb7fe3e0b18ae8ed6ac42bbbe8cc37f2bc2e"
+    },
+    {
+      "path": "PUSH-INTERVAL-20261030.md",
+      "bytes": 2236,
+      "sha256": "0c8c8b32faa4252f41c1b2253a3e54a0e89301765e922f43e3d672073572f9f1"
+    },
+    {
+      "path": "README.md",
+      "bytes": 13789,
+      "sha256": "ef4f8b5ffd0c58ba6ecac4ade1e56ab23a64f73fb9340b5d3d998f202e474010"
+    },
+    {
+      "path": "SILICONFLOW-TITLES-20261030.md",
+      "bytes": 4258,
+      "sha256": "7c61a4cda18403766d5419b4dda1e412608f44fc658ddde66fcfb4942dd95ebf"
+    },
+    {
+      "path": "STATUS-REVIEW-20261030.md",
+      "bytes": 3944,
+      "sha256": "f924869614ddf457b179e503885fc2299c0cefdd94d14d6db4b0552b6ccb8f2a"
+    },
+    {
+      "path": "TITLE-PRECISION-20261030.md",
+      "bytes": 5224,
+      "sha256": "dabfafb84830645e850413b467180fd536371c6c97aa118e66a84a666db457b2"
+    },
+    {
+      "path": "cloud_service.py",
+      "bytes": 1705,
+      "sha256": "2fef3ffd6c59a220c71bf5180da0d6fc70086001eebcae3bb1373709ced1f79c"
+    },
+    {
+      "path": "compass_core.py",
+      "bytes": 6235,
+      "sha256": "cda69d1a742bb6bf924cdc45e62ab2db95ef47b51df7f696d247558ccffa09ce"
+    },
+    {
+      "path": "compose.yaml",
+      "bytes": 332,
+      "sha256": "47d01e64c1e7ed2100bc63d5e3cc7f0fbb60fcf29e90b96827d8afd20face8ff"
+    },
+    {
+      "path": "config.example.json",
+      "bytes": 1318,
+      "sha256": "56e6cc298168d7a04f1f3d852d256038fbd662fd706d60efe75acb18305efc7b"
+    },
+    {
+      "path": "configure.py",
+      "bytes": 6888,
+      "sha256": "e172645189e19283d854de664ee06c2c573f98fcfa66c68dcb73d741fda0b1a8"
+    },
+    {
+      "path": "configure.sh",
+      "bytes": 105,
+      "sha256": "4f91f3d864675c97b8ae86580176352923b7a0117f4ec82828527f54fb44d0d7"
+    },
+    {
+      "path": "monitor.py",
+      "bytes": 48548,
+      "sha256": "95233d72210299ca188fd8f140e6e3a150ca8ec6c07113ed80789c1b57444864"
+    },
+    {
+      "path": "profit_core.py",
+      "bytes": 28899,
+      "sha256": "33ff5591267a19c0c07fc7ebbdfa18f3ff5644f05c2478ac1733dae6eac2c913"
+    },
+    {
+      "path": "profit_sync.py",
+      "bytes": 7651,
+      "sha256": "224937bba5c182604642772eefedab0971ea5263163a533f27e0d6b9dc6e164e"
+    },
+    {
+      "path": "profit_titles.py",
+      "bytes": 20412,
+      "sha256": "550adbdf10999a2b135e4d189c42c094d87248f043cfd31b08a1b2feccdfa19a"
+    },
+    {
+      "path": "profit_web.py",
+      "bytes": 9004,
+      "sha256": "b909ce20767a3477c9aa587bca2b0df0dad7ce3f4f218716c263fba67e31eeee"
+    },
+    {
+      "path": "simulate.py",
+      "bytes": 3375,
+      "sha256": "313749ab2b700fe78e1699d98317d7be480de1c9876a8393e173d025d0ca7c27"
+    },
+    {
+      "path": "start-cloud-services.bat",
+      "bytes": 1779,
+      "sha256": "3042bf35ff6564490e1f6af4e90b67cab2564783072703d56b0e347f99abc21a"
+    },
+    {
+      "path": "start.bat",
+      "bytes": 1978,
+      "sha256": "44d344393e274f2d8b1ebf48e59015e6b9c666e73ad1d059fe9c2c1f36fbd27c"
+    },
+    {
+      "path": "test_compass.py",
+      "bytes": 4628,
+      "sha256": "bbc49314057ee9d18d4e51a66fcc76b6c90e25b832e7d852db3d18a4a27ae0c4"
+    },
+    {
+      "path": "test_cost_images.py",
+      "bytes": 9542,
+      "sha256": "295c873c588be05423358c4108edf1e8c058ca8e9402db29bf3ede2ebba2d899"
+    },
+    {
+      "path": "test_monitor.py",
+      "bytes": 22713,
+      "sha256": "46d963df6d45f23c38ec2aa75d9d4d0990d161f178e79e16e6ae787b5f4274c3"
+    },
+    {
+      "path": "test_product_view.py",
+      "bytes": 19501,
+      "sha256": "cd78ac2706d7fa637d3896b4e7cf00a272be336ebd395fd3970d852c7d7993a8"
+    },
+    {
+      "path": "test_profit.py",
+      "bytes": 16590,
+      "sha256": "98fc8afc5d76f0a431a0ba5824932e646c532fc7d4fef2e1a9252ffae1c6ffbf"
+    },
+    {
+      "path": "test_profit_sync.py",
+      "bytes": 11304,
+      "sha256": "2dd977060204e1a5bdaa6428c15ed9c89a0395866298c216416678fce98d7085"
+    },
+    {
+      "path": "title-translation.example.json",
+      "bytes": 118,
+      "sha256": "7d0a7bd43d6b66a1c364846d1f304c7cde6c1996f416616f31bc04f4dfb07154"
+    },
+    {
+      "path": "title-translation.siliconflow.example.json",
+      "bytes": 120,
+      "sha256": "98d3158d6c885e5c02efd6e83d7e4419218b3d1c63aff1e73aae9a6da1ba1381"
+    },
+    {
+      "path": "分析与优化计划.md",
+      "bytes": 7914,
+      "sha256": "abe01b8f58feb3a00b7469abe056d85fa2f512e5aacb44f2ccc8dc4a0933cc35"
+    },
+    {
+      "path": "web/app.js",
+      "bytes": 31799,
+      "sha256": "8edaa6fe9505ca44d57cd82f48a7116a4deac83ef2a82974bf3207dec75002b4"
+    },
+    {
+      "path": "web/compass.css",
+      "bytes": 28992,
+      "sha256": "2121198e254f02526ec28db9ddf7738d140c3e107d2385a3a1897f1ec554935d"
+    },
+    {
+      "path": "web/compass.js",
+      "bytes": 35617,
+      "sha256": "24b75f4ac46228d17b88f1bcc34d34f929504cdfa0e1d488923f2f2487fd785e"
+    },
+    {
+      "path": "web/index.html",
+      "bytes": 11688,
+      "sha256": "33e2026af5331a7dc49fc0e790d185ae734e6b89627d4428925161e933bc8e6f"
+    },
+    {
+      "path": "web/style.css",
+      "bytes": 23485,
+      "sha256": "5bf2244dfa907492e8c8822f53a732d67577506366f5844b485e90b4ad1f6974"
+    },
+    {
+      "path": "deploy/ozon-push-monitor.service",
+      "bytes": 667,
+      "sha256": "bf6f0ba2272d8790ced5e5365517793e2f767a87e1b883bc18ba9bb8b32f7d14"
+    }
+  ]
+}
