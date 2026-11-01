@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [GitHub产品介绍与亮点补充](../MAINTENANCE-20261101-README-HIGHLIGHTS.md)
 - [Gemini最新罗盘UI优化](../MAINTENANCE-20261101-COMPASS-UI.md)
 - [自动核算选档及轻小件17%费率](../MAINTENANCE-20261101-AUTO-TARIFF.md)
 - [店铺到店内商品的下钻](../MAINTENANCE-20261101-SHOP-DRILL.md)
