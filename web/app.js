@@ -279,8 +279,12 @@ function renderOrders(){
   const shown=orders.filter(o=>!state||o.calculation.status===state);
   $('count').textContent=`${shown.length} 个包裹 · 北京时间`;
   $('orders').innerHTML=shown.length?shown.map(o=>{
-    const c=o.calculation,l=o.lines[0];
-    return `<article class="order-card" data-order="${o.id}" tabindex="0" role="button" aria-label="查看 ${esc(o.shop_name)} ${esc(o.posting)} 的利润"><div><div class="card-top"><span class="shop-badge">${esc(o.shop_name)}</span><span>${fmtTime(o.created)}</span><span class="status-badge" title="${esc(statusHint(o))}">${esc(orderStatus(o))}</span><span class="sync-time">核对 ${fmtTime(o.status_checked_at||o.seen)}</span></div>${productInfo(l)}${o.lines.length>1?`<div class="meta">共 ${o.lines.length} 种商品</div>`:''}<div class="price-row">订单价 ${money(c.revenue)} · 采购 ${money(c.purchase_cost)} · ${esc(o.posting)}</div></div><div class="card-profit">${c.profit==null?'<strong class="pending">待补资料</strong>':`<strong class="${Number(c.profit)<0?'negative':''}">${money(c.profit)}</strong><small>销售利润率 ${esc(c.sales_margin??'—')}%</small>`}${c.included_in_summary===false?'<small>已取消 / 退货 · 不计合计</small>':''}<button type="button" tabindex="-1">${c.profit==null?'填写采购价':'查看 / 修改'} ↗</button></div></article>`;
+    const c=o.calculation;
+    const products=(o.lines.length?o.lines:[null]).map(line=>{
+      const unitPrice=line?.unit_price==null?'待同步':line.currency==='CNY'?money(line.unit_price):`${esc(line.currency||'原币')} ${esc(line.unit_price)}`;
+      return `<div class="order-product">${productInfo(line)}${o.lines.length>1?`<div class="order-unit-price">成交单价 <b>${unitPrice}</b></div>`:''}</div>`;
+    }).join('');
+    return `<article class="order-card" data-order="${o.id}" tabindex="0" role="button" aria-label="查看 ${esc(o.shop_name)} ${esc(o.posting)} 的利润"><div><div class="card-top"><span class="shop-badge">${esc(o.shop_name)}</span><span>${fmtTime(o.created)}</span><span class="status-badge" title="${esc(statusHint(o))}">${esc(orderStatus(o))}</span><span class="sync-time">核对 ${fmtTime(o.status_checked_at||o.seen)}</span></div><div class="order-products">${products}</div>${o.lines.length>1?`<div class="order-products-summary">共 ${o.lines.length} 种商品 · ${o.lines.reduce((sum,line)=>sum+Number(line.quantity||0),0)} 件</div>`:''}<div class="price-row">订单价 ${money(c.revenue)} · 采购 ${money(c.purchase_cost)} · ${esc(o.posting)}</div></div><div class="card-profit">${c.profit==null?'<strong class="pending">待补资料</strong>':`<strong class="${Number(c.profit)<0?'negative':''}">${money(c.profit)}</strong><small>销售利润率 ${esc(c.sales_margin??'—')}%</small>`}${c.included_in_summary===false?'<small>已取消 / 退货 · 不计合计</small>':''}<button type="button" tabindex="-1">${c.profit==null?'填写采购价':'查看 / 修改'} ↗</button></div></article>`;
   }).join(''):'<div class="empty">当前筛选下还没有订单</div>';
   bindThumbnails($('orders'));
   for(const card of $('orders').querySelectorAll('[data-order]')){

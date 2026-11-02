@@ -23,6 +23,11 @@
 .sync-time{font-size:11px;color:#9aa3b0}
 .thumb.placeholder{font-size:11px;text-align:center;line-height:1.5;padding:5px;box-sizing:border-box}
 .thumbnail-slot{flex-shrink:0}
+.order-product+.order-product{border-top:1px solid #edf0f4;margin-top:14px;padding-top:14px}
+.order-unit-price{margin:5px 0 0 81px;font-size:12px;color:#8993a2;line-height:1.6}
+.order-unit-price b{font-weight:500;color:#536176;font-variant-numeric:tabular-nums}
+.order-products-summary{margin-top:12px;font-size:11px;color:#8993a2}
+@media(max-width:650px){.order-unit-price{margin-left:71px}}
 
 @media(max-width:760px){
   .stats{grid-template-columns:repeat(5,minmax(0,1fr));padding:0;margin-bottom:8px;border-radius:13px}
