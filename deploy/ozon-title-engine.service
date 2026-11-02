@@ -1,0 +1,26 @@
+[Unit]
+Description=Private official HY-MT Q4 product title translation
+After=network.target
+
+[Service]
+Type=simple
+User=ozon-monitor
+Group=ozon-monitor
+WorkingDirectory=/opt/ozon-title-engine
+ExecStart=/opt/ozon-title-engine/build/bin/llama-server --model /opt/ozon-title-engine/hy-title-q4-k-m.gguf --alias local-hymt --host 127.0.0.1 --port 5311 --ctx-size 1024 --parallel 1 --threads 1 --threads-batch 1 --batch-size 64 --ubatch-size 64 --n-gpu-layers 0 --jinja
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=5
+Nice=15
+CPUQuota=100%
+MemoryMax=1280M
+MemorySwapMax=128M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+CacheDirectory=ozon-title-engine
+Environment=HOME=/var/cache/ozon-title-engine
+
+[Install]
+WantedBy=multi-user.target

@@ -25,3 +25,5 @@ __pycache__/
 /venv/
 /node_modules/
 /*.tar.gz
+*.gguf
+*.safetensors

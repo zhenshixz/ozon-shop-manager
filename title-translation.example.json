@@ -1,7 +1,4 @@
 {
-  "provider": "baidu",
-  "tier": "standard",
-  "app_id": "",
-  "app_key": "",
-  "monthly_character_budget": 45000
+  "provider": "local-hymt",
+  "model_revision": "q4_k_m"
 }

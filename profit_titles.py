@@ -39,7 +39,10 @@ def settings_for(store):
 def provider_options(settings):
     name=settings.get('provider','mymemory')
     if name=='mymemory':return 'MyMemory',4000
-    if name=='local-hymt':return 'Local/HY-MT1.5-1.8B',100000
+    if name=='local-hymt':
+        revision=settings.get('model_revision','tq2_0')
+        if revision not in ('tq2_0','q4_k_m'):raise TranslationError('configuration')
+        return 'Local/HY-MT1.5-1.8B'+('/Q4_K_M' if revision=='q4_k_m' else ''),100000
     if name=='siliconflow':
         if settings.get('model')!='tencent/Hunyuan-MT-7B' or not isinstance(settings.get('api_key'),str) or not settings['api_key'].strip():
             raise TranslationError('configuration')
@@ -183,6 +186,13 @@ def translate_local_title(text,context):
     prompt='商品类目：'+context+'。\n'
     required=required_title_tokens(text)
     terms=[(token,token) for token in required]
+    for pattern,term in (
+        (r'пистолет\s+для\s+монтажной\s+пены','发泡胶枪'),
+        (r'механическ\w*','机械式'),(r'скелетн\w*','骨架式'),
+        (r'термостатическ\w*','恒温'),
+        (r'салфет\w*\s+влажн\w*|влажн\w*\s+салфет\w*','湿巾'),
+    ):
+        terms.extend((match.group(),term) for match in re.finditer(pattern,text,re.I))
     if '积木' in context:
         terms.extend((token,'积木') for token in re.findall(r'конструктор\w*',text,re.I))
     if terms:prompt+='参考下面的翻译：\n'+'\n'.join(source+' 翻译成 '+target for source,target in terms)+'\n'
@@ -311,7 +321,7 @@ def refresh_titles(store,now=None,translator=None,settings=None):
     now=time.time() if now is None else now
     settings=settings_for(store) if settings is None else settings
     provider,budget=provider_options(settings)
-    local_provider=provider=='Local/HY-MT1.5-1.8B'
+    local_provider=settings.get('provider')=='local-hymt'
     model_provider=local_provider or provider=='SiliconFlow/Hunyuan-MT-7B'
     translate=translator
     if translate is None:
@@ -325,8 +335,11 @@ def refresh_titles(store,now=None,translator=None,settings=None):
         if blocked and blocked[0]>now:return {'translated':0,'blocked':True}
         rows=db.execute('''SELECT DISTINCT l.name FROM profit_lines l LEFT JOIN profit_title_translations t
             ON t.source_text=l.name WHERE trim(l.name)!='' AND (t.source_text IS NULL OR
-            (t.provider NOT IN ('reviewed','user-reviewed','original') AND t.next_attempt<=? AND (t.zh_text='' OR (?=0 AND t.provider!=?) OR t.provider=?)))
-            ORDER BY l.id LIMIT 4''',(now,int(local_provider),provider,provider+'/reference')).fetchall()
+            (t.provider NOT IN ('reviewed','user-reviewed','original') AND t.next_attempt<=? AND
+             (t.zh_text='' OR (?=0 AND t.provider!=?) OR t.provider=? OR
+              (?=1 AND t.provider LIKE 'Local/%' AND t.provider!=?))))
+            ORDER BY l.id LIMIT 4''',(now,int(local_provider),provider,provider+'/reference',
+                int(local_provider and settings.get('model_revision')=='q4_k_m'),provider)).fetchall()
     count=0
     for row in rows:
         title=row['name'];parts=[title] if model_provider else segments(title)

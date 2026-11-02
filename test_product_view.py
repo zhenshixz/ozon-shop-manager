@@ -305,6 +305,30 @@ class ProductViewTest(unittest.TestCase):
             self.assertEqual(core.load_order(db,1)['lines'][0]['name_zh'],'棒球帽')
             self.assertEqual(core.load_order(db,2)['lines'][0]['translation_provider'],'Local/HY-MT1.5-1.8B')
 
+    def test_q4_revision_refreshes_old_local_cache_and_retains_reviewed_titles(self):
+        settings={'provider':'local-hymt','model_revision':'q4_k_m'}
+        self.assertEqual(titles.provider_options(settings)[0],'Local/HY-MT1.5-1.8B/Q4_K_M')
+        with self.store.connection() as db:
+            db.execute("INSERT INTO profit_title_translations VALUES ('Бейсболка','旧模型译文','Local/HY-MT1.5-1.8B',?,0,'')",(self.now,))
+        self.assertEqual(titles.refresh_titles(self.store,self.now,lambda text:'棒球帽',settings)['translated'],1)
+        with self.store.connection() as db:
+            line=core.load_order(db,1)['lines'][0]
+            self.assertEqual(line['name_zh'],'棒球帽')
+            self.assertEqual(line['translation_provider'],'Local/HY-MT1.5-1.8B/Q4_K_M')
+        self.assertEqual(titles.refresh_titles(self.store,self.now+1,lambda text:self.fail('cached'),settings)['translated'],0)
+        with self.store.connection() as db:db.execute("UPDATE profit_title_translations SET provider='user-reviewed',zh_text='人工确认' WHERE source_text='Бейсболка'")
+        self.assertEqual(titles.refresh_titles(self.store,self.now+2,lambda text:self.fail('reviewed'),settings)['translated'],0)
+
+    def test_product_terms_are_injected_without_inventing_attributes(self):
+        source='Пистолет для монтажной пены Механический, Скелетный'
+        with patch('profit_titles._local_title_response',return_value='机械式骨架式发泡胶枪') as request:
+            self.assertEqual(titles.translate_local_title(source,'建筑与装修'),'机械式骨架式发泡胶枪')
+        prompt=request.call_args.args[0]
+        for term in ('发泡胶枪','机械式','骨架式'):self.assertIn(term,prompt)
+        with patch('profit_titles._local_title_response',return_value='恒温湿巾加热器') as request:
+            titles.translate_local_title('Термостатический подогреватель влажных салфеток','家居')
+        for term in ('恒温','湿巾'):self.assertIn(term,request.call_args.args[0])
+
     def test_failed_translation_reason_is_exposed_without_remote_error_text(self):
         def failed(text):raise titles.TranslationError('network-or-response')
         titles.refresh_titles(self.store,self.now,failed,{'provider':'local-hymt'})

@@ -30,4 +30,5 @@
 - 运行配置为config.json、profit-web.json、title-translation.json，均只在部署环境维护；仓库提供脱敏样例。
 - 私钥在本机仓库外的 `.server-access`，不复制进产品目录。
 - 本地标题模型服务位于服务器 `/opt/ozon-title-engine`，由ozon-title-engine.service提供127.0.0.1:5311接口；模型引擎及权重属于运行依赖，不打包进入本源码仓库。恢复方式见本地翻译维护文档。
+- 当前使用腾讯官方1.8B Q4_K_M版本，保持1核CPU上限，内存上限1280MiB；配置样例与服务模板已同步。不要用旧TQ2恢复脚本覆盖；来源、校验值及回退见MAINTENANCE-20261102-LOCAL-Q4.md。
 - 当前生产是systemd部署。根目录Dockerfile/compose.yaml和部分启动脚本来自早期推送版，不是当前完整产品的一键部署方案。
