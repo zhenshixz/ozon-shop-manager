@@ -36,7 +36,12 @@ function translationHint(line){
   if(reason)return '译名暂未完成 · 稍后重试，可切换原文';
   return '中文翻译排队中 · 可切换原文';
 }
-function productInfo(line){return `<div class="product">${thumbnail(line)}<div class="product-info"><h3 title="${esc(line?.name||'')}">${esc(displayTitle(line))}</h3>${titleLanguage==='zh'&&!line?.name_zh&&!/[\u3400-\u9fff]/.test(line?.name||'')?`<small class="translation-pending">${esc(translationHint(line))}</small>`:''}<div class="meta">${esc(line?.offer_id||'')}<br>数量 ${esc(line?.quantity||'—')} · SKU ${esc(line?.sku||'—')}</div></div></div>`;}
+function titleNote(line){
+  if(titleLanguage!=='zh')return '';
+  if(line?.translation_provider?.endsWith('/reference'))return '类目参考 · 保留原文，系统稍后自动重译';
+  return !line?.name_zh&&!/[\u3400-\u9fff]/.test(line?.name||'')?translationHint(line):'';
+}
+function productInfo(line){return `<div class="product">${thumbnail(line)}<div class="product-info"><h3 title="${esc(line?.name||'')}">${esc(displayTitle(line))}</h3>${titleNote(line)?`<small class="translation-pending">${esc(titleNote(line))}</small>`:''}<div class="meta">${esc(line?.offer_id||'')}<br>数量 ${esc(line?.quantity||'—')} · SKU ${esc(line?.sku||'—')}</div></div></div>`;}
 function statusName(status){return ({awaiting_deliver:'待交运',awaiting_packaging:'待备货',delivering:'配送中',delivered:'已送达',cancelled:'已取消',canceled:'已取消',returned:'已退货',awaiting_approve:'待确认'})[status]||status||'状态待同步';}
 function orderStatus(order){const main=statusName(order.status),stage=order.status_label;return order.substatus&&stage&&stage!==main?main+' · '+stage:main;}
 function statusHint(order){return `OZON 主状态：${order.status}${order.substatus?'；子状态：'+order.substatus:''}；核对 ${fmtTime(order.status_checked_at||order.seen)}`;}

@@ -259,8 +259,37 @@ class ProductViewTest(unittest.TestCase):
         class MissingModel(Response):
             def read(self,*args):return json.dumps({'choices':[{'finish_reason':'stop','message':{'content':'颈部训练器'}}]}).encode()
         with patch('profit_titles.urllib.request.urlopen',return_value=MissingModel()):
-            with self.assertRaisesRegex(titles.TranslationError,'specification-mismatch'):
-                titles.translate_local_title(source,'运动 / 健身器材')
+            self.assertEqual(titles.translate_local_title(source,'运动 / 健身器材'),'颈部训练器 JSQ-050')
+
+    def test_protected_specs_and_category_echo_recovery(self):
+        source='Клумба 0.9х0.9 м 1 шт'
+        with patch('profit_titles._local_title_response',return_value='商品类别：住宅和花园 / 花坛。') as request:
+            self.assertEqual(titles.translate_local_title(source,'住宅和花园 / 花坛'),'花坛 0.9 × 0.9 米 1 件')
+        self.assertEqual(request.call_count,1)
+        source='Триммер 019c56eb53cf7071bff0fc22fa0f9e34, кол-во насадок 3'
+        with patch('profit_titles._local_title_response',side_effect=['型号改写','修剪器','配件数量']):
+            self.assertEqual(titles.translate_local_title(source,'美容 / 修剪器'),'修剪器 019c56eb53cf7071bff0fc22fa0f9e34 配件数量 3')
+        source='Кастрюля 20 см 2,8 л с крышкой 1 шт нержавеющая сталь'
+        result='口径20厘米、2.8升的不锈钢汤锅，带盖，1件'
+        self.assertEqual(titles.validate_title_specs(source,result),result)
+
+    def test_reference_fallback_is_labeled_and_retried_not_permanently_cached(self):
+        with patch('profit_titles._local_title_response',return_value='错误数字999'):
+            value=titles.translate_local_title('Бейсболка','服饰 / 棒球帽')
+        self.assertIsInstance(value,titles.ReferenceTitle)
+        self.assertIn('Бейсболка',value)
+        settings={'provider':'local-hymt'}
+        titles.refresh_titles(self.store,self.now,lambda text:value,settings)
+        with self.store.connection() as db:
+            line=core.load_order(db,1)['lines'][0]
+            self.assertTrue(line['translation_provider'].endswith('/reference'))
+            self.assertEqual(line['translation_retry_at'],self.now+3600)
+        self.assertEqual(titles.refresh_titles(self.store,self.now+1,lambda text:self.fail('not due'),settings)['translated'],0)
+        self.assertEqual(titles.refresh_titles(self.store,self.now+3601,lambda text:'棒球帽',settings)['translated'],1)
+        with self.store.connection() as db:
+            line=core.load_order(db,1)['lines'][0]
+            self.assertEqual(line['name_zh'],'棒球帽')
+            self.assertEqual(line['translation_error'],'')
 
     def test_local_provider_preserves_existing_translations_and_only_fills_missing(self):
         with self.store.connection() as db:

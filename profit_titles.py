@@ -18,6 +18,14 @@ class TranslationError(Exception):
     pass
 
 
+class ReferenceTitle(str):
+    """Explicit category reference while a full translation awaits retry."""
+
+
+QUALITY_ERRORS = {'specification-mismatch','category-mismatch','invalid-result',
+                  'unsupported-attributes','untranslated-result','empty-result','source-too-long'}
+
+
 def settings_for(store):
     path=store.directory.parent/'title-translation.json'
     if not path.exists():return {'provider':'mymemory'}
@@ -132,9 +140,9 @@ def validate_title_specs(text,result,context=''):
     if len(result)>1 and (result[0],result[-1]) in (('“','”'),('"','"')):result=result[1:-1].strip()
     if len(result)>1200 or '\n' in result or '<think' in result.lower():raise TranslationError('invalid-result')
     if len(re.findall('[\u3400-\u9fff]',result))>max(24,int(len(text)*.8)):raise TranslationError('invalid-result')
-    if re.search('枪械|弹孔|口径',result) and not re.search(r'оруж|пистолет|винтов|стрельб|калибр',text,re.I):
+    if re.search('枪械|弹孔',result) and not re.search(r'оруж|пистолет|винтов|стрельб|калибр',text,re.I):
         raise TranslationError('unsupported-attributes')
-    numbers=lambda value:Counter(re.findall(r'\d+(?:[.,]\d+)?',value))
+    numbers=lambda value:Counter(n.replace(',','.') for n in re.findall(r'\d+(?:[.,]\d+)?',value))
     if numbers(text)!=numbers(result):raise TranslationError('specification-mismatch')
     if any(not re.search(r'(?<![A-Za-z0-9])'+re.escape(token)+r'(?![A-Za-z0-9])',result,re.I) for token in required_title_tokens(text)):
         raise TranslationError('specification-mismatch')
@@ -180,6 +188,24 @@ def translate_local_title(text,context):
     if terms:prompt+='参考下面的翻译：\n'+'\n'.join(source+' 翻译成 '+target for source,target in terms)+'\n'
     prompt+=('参考上面的信息，把下面的商品标题翻译成简体中文，只输出标题，不要额外解释。'
              '保留全部数字，不添加原文没有的属性，不翻译上面的信息：\n'+text)
+    try:
+        result=_local_title_response(prompt)
+        for token in required:
+            localized={'samsung':'三星'}.get(token.lower())
+            if localized and token.lower() not in result.lower():result=result.replace(localized,token+' ')
+        return validate_title_specs(text,result,context)
+    except TranslationError as exc:
+        if str(exc) not in QUALITY_ERRORS:raise
+    # Do not repeat the same deterministic failed whole-title request forever.
+    try:
+        return translate_protected_title(text,context)
+    except TranslationError as exc:
+        if str(exc) not in QUALITY_ERRORS:raise
+        category=context.rsplit('/',1)[-1].strip() or '商品'
+        return ReferenceTitle(category+' · '+text)
+
+
+def _local_title_response(prompt):
     payload=json.dumps({'model':'local-hymt','messages':[{'role':'user','content':prompt}],
         'temperature':0,'max_tokens':256,'stream':False},ensure_ascii=False).encode('utf-8')
     request=urllib.request.Request('http://127.0.0.1:5311/v1/chat/completions',data=payload,
@@ -195,11 +221,34 @@ def translate_local_title(text,context):
         if choice.get('finish_reason')!='stop':raise ValueError()
         result=choice['message']['content']
     except (KeyError,IndexError,TypeError,ValueError):raise TranslationError('invalid-result') from None
-    # Restore the source spelling when the model localizes a known brand.
-    for token in required:
-        localized={'samsung':'三星'}.get(token.lower())
-        if localized and token.lower() not in result.lower():result=result.replace(localized,token+' ')
-    return validate_title_specs(text,result,context)
+    if not isinstance(result,str):raise TranslationError('invalid-result')
+    return result
+
+
+def translate_protected_title(text,context=''):
+    """Translate words only; original ASCII specs never enter model output."""
+    parts=re.split(r'([A-Za-z0-9]+(?:[./&+\-][A-Za-z0-9]+)*)',text)
+    units={'м':'米','см':'厘米','мм':'毫米','л':'升','мл':'毫升','г':'克','кг':'千克',
+           'шт':'件','пара':'对','пары':'对','пар':'对','х':'×','×':'×'}
+    result=[];calls=0
+    for index,part in enumerate(parts):
+        if index%2:
+            result.append(part);continue
+        fragment=part.strip(' \t\r\n,;，；.-')
+        if not fragment:continue
+        if not re.search('[\u0400-\u04ff]',fragment):
+            result.append(fragment);continue
+        translated=units.get(fragment.lower())
+        # Category-grounded disambiguation of known misleading dictionary senses.
+        if fragment.lower()=='клумба' and '花坛' in context:translated='花坛'
+        if translated is None:
+            calls+=1
+            if calls>6:raise TranslationError('source-too-long')
+            translated=_local_title_response('Translate the following Russian text into Simplified Chinese, without additional explanation.\n\n'+fragment)
+            translated=validate_title_specs(fragment,translated,context)
+            if re.search('[\u0400-\u04ff]',translated):raise TranslationError('untranslated-result')
+        result.append(translated)
+    return validate_title_specs(text,' '.join(result),context)
 
 
 def translate_baidu_segment(text,settings):
@@ -276,17 +325,18 @@ def refresh_titles(store,now=None,translator=None,settings=None):
         if blocked and blocked[0]>now:return {'translated':0,'blocked':True}
         rows=db.execute('''SELECT DISTINCT l.name FROM profit_lines l LEFT JOIN profit_title_translations t
             ON t.source_text=l.name WHERE trim(l.name)!='' AND (t.source_text IS NULL OR
-            (t.provider NOT IN ('reviewed','user-reviewed','original') AND t.next_attempt<=? AND (t.zh_text='' OR (?=0 AND t.provider!=?))))
-            ORDER BY l.id LIMIT 4''',(now,int(local_provider),provider)).fetchall()
+            (t.provider NOT IN ('reviewed','user-reviewed','original') AND t.next_attempt<=? AND (t.zh_text='' OR (?=0 AND t.provider!=?) OR t.provider=?)))
+            ORDER BY l.id LIMIT 4''',(now,int(local_provider),provider,provider+'/reference')).fetchall()
     count=0
     for row in rows:
         title=row['name'];parts=[title] if model_provider else segments(title)
         if not parts:continue
         already_chinese=bool(re.search('[\u3400-\u9fff]',title)) and not re.search('[\u0400-\u04ff]',title)
+        reference=False
         try:
             if already_chinese:translated=title
             else:
-                result=[]
+                result=[];reference=False
                 for part in parts:
                     with store.connection() as db:
                         db.execute('BEGIN IMMEDIATE')
@@ -296,14 +346,17 @@ def refresh_titles(store,now=None,translator=None,settings=None):
                     if provider=='Baidu' and translator is None:time.sleep(1.05)
                     if model_provider and translator is None:
                         context=context_for_title(store,title,now)
-                        result.append(translate_local_title(part,context) if local_provider else translate_siliconflow_title(part,settings,context))
-                    else:result.append(translate(part))
+                        value=translate_local_title(part,context) if local_provider else translate_siliconflow_title(part,settings,context)
+                    else:value=translate(part)
+                    reference=reference or isinstance(value,ReferenceTitle)
+                    result.append(value)
                 translated=' '.join(result)
             with store.connection() as db:
                 db.execute('''INSERT INTO profit_title_translations VALUES (?,?,?,?,?,?) ON CONFLICT(source_text)
                     DO UPDATE SET zh_text=excluded.zh_text,provider=excluded.provider,translated_at=excluded.translated_at,
-                    next_attempt=0,last_error='' WHERE profit_title_translations.provider NOT IN ('reviewed','user-reviewed')''',
-                    (title,translated,'original' if already_chinese else provider,now,0,''))
+                    next_attempt=excluded.next_attempt,last_error=excluded.last_error WHERE profit_title_translations.provider NOT IN ('reviewed','user-reviewed')''',
+                    (title,translated,'original' if already_chinese else provider+('/reference' if reference else ''),now,
+                     now+3600 if not already_chinese and reference else 0,'reference-only' if not already_chinese and reference else ''))
                 db.execute('DELETE FROM profit_translation_requests WHERE provider=? AND created<?',(provider,min(window_start,now-172800)))
             count+=1
         except TranslationError as exc:
