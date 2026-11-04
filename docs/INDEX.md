@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [003店两个官方促销移除MVP](../MAINTENANCE-20261104-PROMO-MVP-003.md)
 - [本地翻译升级官方Q4精度](../MAINTENANCE-20261102-LOCAL-Q4.md)
 - [翻译质量失败自动恢复与规格保护](../MAINTENANCE-20261102-TITLE-RECOVERY.md)
 - [多商品订单列表完整展示](../MAINTENANCE-20261102-MULTI-PRODUCT.md)
