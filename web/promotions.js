@@ -77,26 +77,29 @@ async function api(path,data){const r=await fetch(base+path,{method:data?'POST':
 function latest(sid){for(const run of state.runs){if(run.shops.includes(sid)){const item=run.result.find(s=>s.shop===sid);return{run,item,status:run.status==='error'&&(!item||item.status==='running')?'error':item?.status||run.status};}}return null;}
 function historyShopName(run,sid){return run.result.find(s=>s.shop===sid)?.name||state.shops.find(s=>s.id===sid)?.name||sid;}
 function historyShops(run){
- return `<div class="history-shops"><span>参与店铺</span>${run.shops.map(sid=>{const result=run.result.find(s=>s.shop===sid);const unfinished=!result||['running','queued'].includes(result.status);const failed=result?.status==='error'||(unfinished&&!['running','queued'].includes(run.status));const suffix=failed?(result?.status==='error'?'需关注':'未完成'):unfinished?(result?label[result.status]||'待处理':'待处理'):'';return `<button type="button" class="history-shop-name ${failed?'shop-needs-attention':''}" data-run="${esc(run.id)}" data-sid="${esc(sid)}">${esc(historyShopName(run,sid))}${suffix?` · ${suffix}`:''}</button>`;}).join('')}</div>`;
+ const removedShops=run.shops.filter(sid=>(run.result.find(s=>s.shop===sid)?.removed||0)>0);
+ if(!removedShops.length)return '';
+ return `<div class="history-shops"><span>已移除店铺</span>${removedShops.map(sid=>{const result=run.result.find(s=>s.shop===sid);const unfinished=!result||['running','queued'].includes(result.status);const failed=result?.status==='error'||(unfinished&&!['running','queued'].includes(run.status));const suffix=failed?(result?.status==='error'?'需关注':'未完成'):unfinished?(result?label[result.status]||'待处理':'待处理'):'';return `<button type="button" class="history-shop-name ${failed?'shop-needs-attention':''}" data-run="${esc(run.id)}" data-sid="${esc(sid)}">${esc(historyShopName(run,sid))}${suffix?` · ${suffix}`:''}</button>`;}).join('')}</div>`;
 }
 function activityOwners(activity,runId){
  if(!runId||!activity.shops.size)return '';
- return `<div class="activity-owners">${[...activity.shops.values()].map(s=>`<button type="button" class="activity-owner ${s.error?'owner-error':s.pending?'owner-pending':''}" data-run="${esc(runId)}" data-sid="${esc(s.id)}"><b>${esc(s.name)}</b><span>${s.removed?`移除 ${s.removed} 条`:s.error||s.pending?'未确认移除':'无待加入'}${s.error?' · 需核对':s.pending?' · 核对中':''}</span></button>`).join('')}</div>`;
+ return `<div class="activity-owners">${[...activity.shops.values()].filter(s=>s.removed>0).map(s=>`<button type="button" class="activity-owner ${s.error?'owner-error':s.pending?'owner-pending':''}" data-run="${esc(runId)}" data-sid="${esc(s.id)}"><b>${esc(s.name)}</b><span>移除 ${s.removed} 条${s.error?' · 需核对':s.pending?' · 核对中':''}</span></button>`).join('')}</div>`;
 }
 function activityNames(batches,runId=''){
  const grouped=new Map();
  for(const batch of batches||[]){
   const key=batch.action_id??batch.title;if(!key)continue;
   if(!grouped.has(key))grouped.set(key,{title:batch.title||`活动 ${batch.action_id}`,removed:0,dates:new Set(),error:false,pending:false,shops:new Map()});
-  const item=grouped.get(key);item.removed+=batch.removed||0;if(batch.date)item.dates.add(batch.date);
+  const item=grouped.get(key);item.removed+=batch.removed||0;if(batch.date&&batch.removed>0)item.dates.add(batch.date);
   item.error||=batch.status==='error';item.pending||=!['ok','error'].includes(batch.status);
   if(batch.shop_id){
    if(!item.shops.has(batch.shop_id))item.shops.set(batch.shop_id,{id:batch.shop_id,name:batch.shop_name,removed:0,error:false,pending:false});
    const shop=item.shops.get(batch.shop_id);shop.removed+=batch.removed||0;shop.error||=batch.status==='error';shop.pending||=!['ok','error'].includes(batch.status);
   }
  }
- if(!grouped.size)return '';
- return `<div class="activity-list"><span class="activity-caption">本次活动</span>${[...grouped.values()].map(a=>`<div class="activity-item"><div class="activity-name">${esc(a.title)}</div><span class="activity-outcome ${a.error?'activity-error':''}">${a.error?'需核对 · ':a.pending?'核对中 · ':''}${a.removed?`已移除 ${a.removed} 条`:a.error||a.pending?'尚未确认移除':'无待加入商品'}</span><small>计划加入：${[...a.dates].sort().map(d=>esc(stamp(d))).join('、')}（北京时间）</small>${activityOwners(a,runId)}</div>`).join('')}</div>`;
+ const removedActivities=[...grouped.values()].filter(a=>a.removed>0);
+ if(!removedActivities.length)return '';
+ return `<div class="activity-list"><span class="activity-caption">已移除活动</span>${removedActivities.map(a=>`<div class="activity-item"><div class="activity-name">${esc(a.title)}</div><span class="activity-outcome ${a.error?'activity-error':''}">${a.error?'需核对 · ':a.pending?'核对中 · ':''}已移除 ${a.removed} 条</span><small>计划加入：${[...a.dates].sort().map(d=>esc(stamp(d))).join('、')}（北京时间）</small>${activityOwners(a,runId)}</div>`).join('')}</div>`;
 }
 function selection(){const count=selected.size;$('selection-count').textContent=`已选择 ${count} 家`;$('run').disabled=!count||active||busy;$('run').textContent=active?'任务执行中':`立即执行${count?' · '+count+' 家':''}`;$('select-all').checked=count===state.shops.length&&count>0;$('select-all').indeterminate=count>0&&count<state.shops.length;}
 function render(){
