@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [免费以图搜货本地实测：成功项、登录限制与交付边界](TEST-20261104-FREE-IMAGE-SOURCING.md)
 - [以图搜货比价调研：1688、淘宝、拼多多（未开发）](RESEARCH-20261104-IMAGE-PRICE-COMPARISON.md)
 - [利润详情商品标题跳转 OZON 商品页](../MAINTENANCE-20261104-PRODUCT-TITLE-LINK.md)
 - [促销工具暂时免口令访问](../MAINTENANCE-20261104-PROMOTION-PUBLIC-ACCESS.md)
