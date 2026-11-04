@@ -41,7 +41,9 @@ function titleNote(line){
   if(line?.translation_provider?.endsWith('/reference'))return '类目参考 · 保留原文，系统稍后自动重译';
   return !line?.name_zh&&!/[\u3400-\u9fff]/.test(line?.name||'')?translationHint(line):'';
 }
-function productInfo(line){return `<div class="product">${thumbnail(line)}<div class="product-info"><h3 title="${esc(line?.name||'')}">${esc(displayTitle(line))}</h3>${titleNote(line)?`<small class="translation-pending">${esc(titleNote(line))}</small>`:''}<div class="meta">${esc(line?.offer_id||'')}<br>数量 ${esc(line?.quantity||'—')} · SKU ${esc(line?.sku||'—')}</div></div></div>`;}
+function productInfo(line){const qty=line?.quantity??'—',multi=Number(qty)>1;return `<div class="product">${thumbnail(line)}<div class="product-info"><h3 title="${esc(line?.name||'')}">${esc(displayTitle(line))}</h3>${titleNote(line)?`<small class="translation-pending">${esc(titleNote(line))}</small>`:''}<div class="meta">${line?.offer_id?`<div class="meta-line"><span class="meta-label">货号</span> <span class="meta-code">${esc(line.offer_id)}</span></div>`:''}<div class="meta-line"><span class="meta-qty${multi?' is-multi':''}">数量 <b>${esc(qty)}</b></span>${line?.sku?`<span class="meta-dot">·</span><span class="meta-label">SKU</span> <span class="meta-code">${esc(line.sku)}</span>`:''}</div></div></div></div>`;}
+function statusTone(status){const s=String(status||'').toLowerCase();return ['awaiting_packaging','awaiting_approve'].includes(s)?'packaging':s==='awaiting_deliver'?'deliver':s==='delivering'?'delivering':s==='delivered'?'delivered':['cancelled','canceled','returned'].includes(s)?'cancelled':'default';}
+function statusBadgeHtml(order){const main=statusName(order.status),stage=order.status_label,hasSub=order.substatus&&stage&&stage!==main;return `<span class="status-badge status-${statusTone(order.status)}" title="${esc(statusHint(order))}"><b>${esc(main)}</b>${hasSub?`<em> · ${esc(stage)}</em>`:''}</span>`;}
 function statusName(status){return ({awaiting_deliver:'待交运',awaiting_packaging:'待备货',delivering:'配送中',delivered:'已送达',cancelled:'已取消',canceled:'已取消',returned:'已退货',awaiting_approve:'待确认'})[status]||status||'状态待同步';}
 function orderStatus(order){const main=statusName(order.status),stage=order.status_label;return order.substatus&&stage&&stage!==main?main+' · '+stage:main;}
 function statusHint(order){return `OZON 主状态：${order.status}${order.substatus?'；子状态：'+order.substatus:''}；核对 ${fmtTime(order.status_checked_at||order.seen)}`;}
@@ -264,7 +266,6 @@ async function loadOrders(){
     const ready=orders.filter(o=>o.calculation.status==='ready');
     const eligible=ready.filter(o=>o.calculation.included_in_summary!==false);
     const summary=dashboard.summary;
-    $('pending').textContent=summary.pending;$('ready').textContent=summary.ready;
     const total=Number(summary.profit);
     $('total').textContent=summary.eligible_ready?money(total):'—';
     $('total').classList.toggle('negative',total<0);
@@ -281,21 +282,35 @@ async function loadOrders(){
   }catch(error){if(serial===loadSerial)notice(error.message);}finally{if(serial===loadSerial)$('refresh').disabled=false;}
 }
 function renderOrders(){
-  const shown=orders.filter(o=>!state||o.calculation.status===state);
-  $('count').textContent=`${shown.length} 个包裹 · 北京时间`;
+  const cancelledOnly=$('cancelled-only')?.checked||false;
+  const scoped=orders.filter(o=>['cancelled','canceled'].includes(String(o.status||'').toLowerCase())===cancelledOnly);
+  const readyCount=scoped.filter(o=>o.calculation.status==='ready').length;
+  $('pending').textContent=scoped.length-readyCount;$('ready').textContent=readyCount;
+  const shown=scoped.filter(o=>!state||o.calculation.status===state);
+  $('count').textContent=`${shown.length} 个${cancelledOnly?'已取消':''}包裹 · 北京时间`;
   $('orders').innerHTML=shown.length?shown.map(o=>{
     const c=o.calculation;
     const products=(o.lines.length?o.lines:[null]).map(line=>{
       const unitPrice=line?.unit_price==null?'待同步':line.currency==='CNY'?money(line.unit_price):`${esc(line.currency||'原币')} ${esc(line.unit_price)}`;
       return `<div class="order-product">${productInfo(line)}${o.lines.length>1?`<div class="order-unit-price">成交单价 <b>${unitPrice}</b></div>`:''}</div>`;
     }).join('');
-    return `<article class="order-card" data-order="${o.id}" tabindex="0" role="button" aria-label="查看 ${esc(o.shop_name)} ${esc(o.posting)} 的利润"><div><div class="card-top"><span class="shop-badge">${esc(o.shop_name)}</span><span>${fmtTime(o.created)}</span><span class="status-badge" title="${esc(statusHint(o))}">${esc(orderStatus(o))}</span><span class="sync-time">核对 ${fmtTime(o.status_checked_at||o.seen)}</span></div><div class="order-products">${products}</div>${o.lines.length>1?`<div class="order-products-summary">共 ${o.lines.length} 种商品 · ${o.lines.reduce((sum,line)=>sum+Number(line.quantity||0),0)} 件</div>`:''}<div class="price-row">订单价 ${money(c.revenue)} · 采购 ${money(c.purchase_cost)} · ${esc(o.posting)}</div></div><div class="card-profit">${c.profit==null?'<strong class="pending">待补资料</strong>':`<strong class="${Number(c.profit)<0?'negative':''}">${money(c.profit)}</strong><small>销售利润率 ${esc(c.sales_margin??'—')}%</small>`}${c.included_in_summary===false?'<small>已取消 / 退货 · 不计合计</small>':''}<button type="button" tabindex="-1">${c.profit==null?'填写采购价':'查看 / 修改'} ↗</button></div></article>`;
-  }).join(''):'<div class="empty">当前筛选下还没有订单</div>';
+    return `<article class="order-card" data-order="${o.id}" tabindex="0" role="button" aria-label="查看 ${esc(o.shop_name)} ${esc(o.posting)} 的利润"><div class="card-main"><div class="card-top"><div class="card-head-primary"><span class="shop-badge">${esc(o.shop_name)}</span><span class="card-posting">${esc(o.posting)}</span></div>${statusBadgeHtml(o)}<div class="card-head-time"><span>下单 ${fmtTime(o.created)}</span><span class="sync-time">核对 ${fmtTime(o.status_checked_at||o.seen)}</span></div></div><div class="order-products">${products}</div>${o.lines.length>1?`<div class="order-products-summary">共 ${o.lines.length} 种商品 · ${o.lines.reduce((sum,line)=>sum+Number(line.quantity||0),0)} 件</div>`:''}<div class="price-row"><div class="price-metrics"><div class="price-metric"><span class="price-label">订单价</span><strong class="price-val">${money(c.revenue)}</strong></div><span class="price-divider" aria-hidden="true"></span><div class="price-metric price-metric-cost"><span class="price-label">采购成本</span><strong class="price-val${c.purchase_cost==null?' is-missing':''}">${c.purchase_cost==null?'待填写':money(c.purchase_cost)}</strong></div></div>${purchaseReuseBadge(o)}</div></div><div class="card-profit"><div class="profit-summary">${c.profit==null?'<strong class="pending">待补资料</strong>':`<span class="profit-caption">预估利润</span><strong class="${Number(c.profit)<0?'negative':''}">${money(c.profit)}</strong><small class="profit-margin">销售利润率 ${esc(c.sales_margin??'—')}%</small>`}${c.included_in_summary===false?'<small class="profit-excluded">已取消 / 退货 · 不计合计</small>':''}</div><button type="button" tabindex="-1">${c.profit==null?'填写采购价':'查看 / 修改'} ↗</button></div></article>`;
+  }).join(''):`<div class="empty">${cancelledOnly?'当前筛选下没有已取消订单':'当前筛选下还没有订单'}</div>`;
   bindThumbnails($('orders'));
   for(const card of $('orders').querySelectorAll('[data-order]')){
     card.addEventListener('click',()=>openOrder(Number(card.dataset.order)));
     card.addEventListener('keydown',event=>{if(event.target===card&&(event.key==='Enter'||event.key===' ')){event.preventDefault();openOrder(Number(card.dataset.order));}});
   }
+}
+function purchaseReuseBadge(order){
+  const reused=order.lines.filter(line=>line.purchase_origin==='inherited');
+  if(!reused.length)return '';
+  const sources=[...new Set(reused.map(line=>line.purchase_source_posting).filter(Boolean))];
+  return `<span class="purchase-reuse-badge" title="${esc(sources.length?'来源订单：'+sources.join('、'):'沿用最近一次人工填写的同商品采购单价')}" aria-label="采购价沿用，可在详情修改">采购价沿用</span>`;
+}
+function purchaseCostHint(line){
+  if(line.purchase_origin==='inherited')return `<small id="reuse-note-${line.id}" class="purchase-reuse-note" title="${esc(line.purchase_source_posting?'来源订单：'+line.purchase_source_posting:'历史采购记录')}">采购价沿用${line.purchase_source_posting?' · 来源 '+esc(line.purchase_source_posting):''}，可修改</small>`;
+  return line.previous_cost!=null?`<button type="button" class="suggestion" data-cost="${line.id}" data-value="${esc(line.previous_cost)}">参考上次 ${money(line.previous_cost)}，点击填入</button>`:'<small>出单后实际购买的单件成本</small>';
 }
 function payload(){
   return {lines:current.lines.map(l=>({id:l.id,purchase_unit:$('cost-'+l.id).value,price_override:$('price-'+l.id).value})),inputs:{weight_override:weightMode==='custom'?$('weight').value:null,template:$('template').value,rate:$('rate').value,forwarder:$('forwarder').value,other_cost:$('other').value},weight_mode:weightMode,weight_confirmed:confirmedWeight!==''&&confirmedWeight===$('weight').value,expected_api_weight_g:current.calculation.api_weight_g,expected_weight_override:current.inputs.weight_override??null};
@@ -316,7 +331,7 @@ async function openOrder(id){
     $('detail-shop').textContent=current.shop_name+' · '+current.posting+' · '+orderStatus(current);
     $('order-status').textContent='平台最新阶段：'+orderStatus(current)+'。'+statusHint(current)+(current.provider_status?'；物流商原文：'+current.provider_status:'');
     $('detail-title').textContent='采购成本与利润';
-    $('product-fields').innerHTML=current.lines.map(l=>`<section class="product-block">${productInfo(l)}<div class="field-grid"><label class="cost-label">实际采购单价 · 元<input id="cost-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="请填写每件采购价" value="${esc(l.purchase_unit??'')}">${l.previous_cost!=null?`<button type="button" class="suggestion" data-cost="${l.id}" data-value="${esc(l.previous_cost)}">参考上次 ${money(l.previous_cost)}，点击填入</button>`:'<small>出单后实际购买的单件成本</small>'}</label><label>核算售价 · 元 / 件<input id="price-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="${esc(l.currency==='CNY'?l.unit_price:'请填写人民币售价')}" value="${esc(l.price_override??'')}"><small>订单成交价 ${esc(l.currency)} ${esc(l.unit_price??'待同步')}；留空则沿用</small></label></div></section>`).join('');
+    $('product-fields').innerHTML=current.lines.map(l=>`<section class="product-block">${productInfo(l)}<div class="field-grid"><label class="cost-label">实际采购单价 · 元<input id="cost-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="请填写每件采购价" value="${esc(l.purchase_unit??'')}">${purchaseCostHint(l)}</label><label>核算售价 · 元 / 件<input id="price-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="${esc(l.currency==='CNY'?l.unit_price:'请填写人民币售价')}" value="${esc(l.price_override??'')}"><small>订单成交价 ${esc(l.currency)} ${esc(l.unit_price??'待同步')}；留空则沿用</small></label></div></section>`).join('');
     bindThumbnails($('product-fields'));
     const p=current.inputs,c=current.calculation;
     weightMode=p.weight_override==null?'api':'custom';confirmedWeight='';
@@ -368,17 +383,19 @@ $('edit-form').addEventListener('submit',async event=>{
   event.preventDefault();clearTimeout(timer);previewSerial++;const revision=editRevision;
   $('save').disabled=true;$('save-status').textContent='正在保存…';
   try{const result=await api('/orders/'+current.id,payload());
-    if(revision===editRevision){current=result.order;showCalculation(current.calculation);$('save-status').textContent='已保存，下次打开仍会保留';}else $('save-status').textContent='已保存先前内容；新修改请再次保存';
+    if(revision===editRevision){current=result.order;showCalculation(current.calculation);for(const line of current.lines){const note=$('reuse-note-'+line.id);if(note&&line.purchase_origin!=='inherited')note.textContent='已保存本单采购价';}$('save-status').textContent='已保存，下次打开仍会保留';}else $('save-status').textContent='已保存先前内容；新修改请再次保存';
     await loadOrders();
   }catch(error){$('save-status').textContent=error.message;}finally{$('save').disabled=false;}
 });
 $('close').addEventListener('click',()=>{if($('save').disabled)return;$('detail').close();clearTimeout(timer);previewSerial++;});
 $('detail').addEventListener('cancel',event=>{if($('save').disabled)event.preventDefault();clearTimeout(timer);previewSerial++;});
 $('refresh').addEventListener('click',loadOrders);
+$('cancelled-only')?.addEventListener('change',renderOrders);
 for(const id of ['shop','date'])$(id).addEventListener('change',loadOrders);
 let searchTimer;$('search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(loadOrders,250);});
 document.querySelectorAll('[data-state]').forEach(button=>button.addEventListener('click',()=>{state=button.dataset.state;document.querySelectorAll('[data-state]').forEach(b=>b.classList.toggle('active',b===button));renderOrders();}));
 async function start(){
+  if($('cancelled-only'))$('cancelled-only').checked=false;
   try{
     const params=new URLSearchParams(location.hash.slice(1)),token=params.get('k');
     let info;

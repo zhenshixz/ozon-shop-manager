@@ -27,10 +27,10 @@ class CostImagesTest(unittest.TestCase):
         self.now=dt.datetime(2026,10,31,12,tzinfo=core.CHINA).timestamp()
         self.api=ImagesAPI()
 
-    def capture(self,posting='A',cost=None,quantity=1,status='awaiting_packaging',shop=0,created=None,sku='123'):
+    def capture(self,posting='A',cost=None,quantity=1,status='awaiting_packaging',shop=0,created=None,sku='123',offer='hat'):
         data={'posting_number':posting,'order_number':posting,'status':status,
               'created_at':monitor.stamp(self.now if created is None else created),
-              'products':[{'offer_id':'hat','sku':sku,'name':'帽子','quantity':quantity,
+              'products':[{'offer_id':offer,'sku':sku,'name':'帽子','quantity':quantity,
                            'price':{'amount':'39','currency':'CNY'},'weight':.339}]}
         with self.store.connection() as db:
             core.capture_postings(db,self.shops[shop],'fbs',[data],self.now)
@@ -95,7 +95,7 @@ class CostImagesTest(unittest.TestCase):
         self.capture('B','5.1',2,'cancelled')
         self.capture('C','2',3,'returned')
         self.capture('D','0')
-        self.capture('E')
+        self.capture('E',offer='new-unpurchased-product')
         stats=self.statistics()
         self.assertEqual(stats['total_cost'],'40.89')
         self.assertEqual(stats['cancelled_returned_cost'],'16.20')
@@ -160,7 +160,7 @@ class CostImagesTest(unittest.TestCase):
         self.assertEqual(client.get(base+'?details=1&offset=-1').status_code,400)
 
     def test_cost_details_hide_unfilled_before_pagination_but_keep_zero(self):
-        self.capture('unfilled')
+        self.capture('unfilled',offer='new-unpurchased-product')
         self.capture('paid',cost='12')
         self.capture('zero',cost='0')
         with self.store.connection() as db:

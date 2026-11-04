@@ -174,3 +174,89 @@
 
 /* 2026-10-31 Equal five-stat layout and tab counters */
 .stats{grid-template-columns:repeat(5,minmax(0,1fr))}.tab-count{display:inline-block;min-width:20px;margin-left:5px;padding:1px 5px;border-radius:6px;background:#dfe5ee;font-size:11px;line-height:1.5;font-variant-numeric:tabular-nums}.tabs .active .tab-count{background:#edf2ff;color:#225fe4}
+
+/* List scope: cancelled orders are hidden until explicitly selected. */
+.list-head{align-items:center;gap:12px}
+.cancelled-filter{display:inline-flex;align-items:center;gap:6px;min-height:24px;font-size:12px;font-weight:400;color:#7a889c;line-height:1.5;white-space:nowrap;cursor:pointer}
+.cancelled-filter:hover{color:var(--blue)}
+.cancelled-filter input{appearance:auto;display:inline-block;width:13px;height:13px;min-height:0;flex:0 0 auto;margin:0;padding:0;border-radius:3px;accent-color:var(--blue);cursor:pointer}
+
+/* Procurement price provenance: quiet and editable. */
+.purchase-reuse-badge{display:inline-block;margin-left:3px;padding:1px 5px;border-radius:4px;background:#eef3fa;color:#6580a2;font-size:10px;font-weight:400;line-height:1.6;white-space:nowrap;vertical-align:baseline}
+.purchase-reuse-note{display:inline-flex;align-items:center;gap:4px;color:#3b6398;background:#f0f6ff;border:1px solid #d8e6fa;padding:3px 8px;border-radius:6px;margin-top:7px;font-size:11px;line-height:1.4}
+
+/* 2026-11-03 Order Card Hierarchy & Procurement Provenance Refinement */
+.order-card{grid-template-columns:minmax(0,1fr) 186px;gap:20px;padding:18px 22px;background:#ffffff;border:1px solid #e1e8f2;border-radius:14px;box-shadow:0 2px 8px rgba(20,40,71,.03);transition:border-color .15s,box-shadow .15s}
+.order-card:hover{border-color:#9ec0f5;box-shadow:0 6px 18px rgba(20,40,71,.06)}
+.card-main{min-width:0;display:flex;flex-direction:column}
+.card-top{display:flex;align-items:center;gap:10px 12px;padding-bottom:10px;margin-bottom:13px;border-bottom:1px solid #eef2f7;flex-wrap:wrap}
+.card-head-primary{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.shop-badge{color:#1d4ed8;background:#eef4ff;border-radius:5px;padding:2px 8px;font-size:12px;font-weight:700;line-height:1.45;flex-shrink:0}
+.card-posting{color:#334155;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.card-head-time{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:#8e9bab;font-variant-numeric:tabular-nums;order:2}
+.card-head-time .sync-time::before{content:'·';margin-right:6px;color:#cbd5e1}
+.status-badge{order:3;margin-left:auto;display:inline-flex;align-items:center;gap:5px;padding:0;background:transparent;font-size:12px;line-height:1.4;color:#475569;white-space:nowrap}
+.status-badge::before{content:'';width:6px;height:6px;border-radius:50%;background:#94a3b8;flex-shrink:0}
+.status-badge b{font-weight:600}
+.status-badge em{font-style:normal;font-weight:400;color:#64748b}
+.status-badge.status-packaging b{color:#d97706}
+.status-badge.status-packaging::before{background:#f59e0b}
+.status-badge.status-deliver b{color:#2563eb}
+.status-badge.status-deliver::before{background:#3b82f6}
+.status-badge.status-delivering b{color:#0284c7}
+.status-badge.status-delivering::before{background:#0ea5e9}
+.status-badge.status-delivered b{color:#16a34a}
+.status-badge.status-delivered::before{background:#22c55e}
+.status-badge.status-cancelled b{color:#64748b}
+.status-badge.status-cancelled::before{background:#94a3b8}
+.product-info{flex:1;min-width:0}
+.product-info h3{font-size:14.5px;line-height:1.45;color:#182230;margin:0 0 6px;font-weight:600}
+.meta{display:flex;flex-direction:column;gap:3px;font-size:12px;color:#64748b;line-height:1.45;font-variant-numeric:tabular-nums}
+.meta-line{display:flex;flex-wrap:wrap;align-items:center;gap:5px;min-width:0}
+.meta-label{color:#8e9bab;font-size:11.5px}
+.meta-code{color:#475569;overflow-wrap:anywhere}
+.meta-dot{color:#cbd5e1}
+.meta-qty{color:#475569}
+.meta-qty b{font-weight:600;color:#1e293b}
+.meta-qty.is-multi{color:#b45309;background:#fff4e5;padding:0 5px;border-radius:4px}
+.meta-qty.is-multi b{font-weight:700;color:#b45309}
+.order-products-summary{margin:10px 0 0 81px;font-size:11.5px;color:#64748b;font-weight:500}
+.price-row{display:inline-flex;align-items:center;align-self:flex-start;flex-wrap:wrap;gap:6px 12px;margin:11px 0 0 81px;max-width:calc(100% - 81px);padding:7px 12px;background:#f7f9fc;border:1px solid #ebf0f7;border-radius:8px;font-size:12px;color:#475569}
+.price-metrics{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px 12px;min-width:0}
+.price-metric{display:inline-flex;align-items:center;gap:5px;min-width:0}
+.price-label{font-size:11.5px;color:#64748b;font-weight:400}
+.price-val{font-size:13.5px;font-weight:700;color:#1e293b;font-variant-numeric:tabular-nums}
+.price-val.is-missing{font-size:12px;font-weight:600;color:#b45309}
+.price-divider{width:1px;height:12px;background:#d8e2ef;flex-shrink:0}
+.purchase-reuse-badge{display:inline-flex;align-items:center;margin:0;padding:2px 7px;border-radius:5px;background:#e8f0fe;color:#2b579a;font-size:11px;font-weight:500;line-height:1.35;white-space:nowrap}
+.card-profit{border-left:1px solid #eef2f7;padding-left:18px;display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;gap:10px}
+.profit-summary{display:flex;flex-direction:column;align-items:flex-end;gap:4px;text-align:right}
+.profit-caption{font-size:11px;color:#8693a6;font-weight:500}
+.card-profit strong{font-size:25px;line-height:1.15;font-weight:700;color:#15803d;font-variant-numeric:tabular-nums}
+.card-profit strong.negative{color:#d34e4e}
+.card-profit .pending{font-size:13px;font-weight:600;color:#b45309;background:#fff5e4;border:1px solid #fde0b2;padding:5px 10px;border-radius:7px}
+.card-profit small{color:#64748b;font-size:11.5px;font-variant-numeric:tabular-nums;margin:0}
+.card-profit .profit-excluded{color:#b45309;background:#fffbeb;padding:1px 6px;border-radius:4px;font-size:11px}
+.card-profit button{font-size:12px;font-weight:600;padding:7px 12px;border-radius:8px;border:1px solid #d4e1f7;color:#1d56d4;background:#f4f8ff;margin:0;white-space:nowrap;transition:background .15s,border-color .15s}
+.order-card:hover .card-profit button{background:#e6f0ff;border-color:#acc8f7}
+
+@media(max-width:650px){
+  .order-card{grid-template-columns:minmax(0,1fr);gap:11px;padding:14px 15px;border-radius:13px}
+  .card-top{gap:4px 8px;padding-bottom:9px;margin-bottom:11px}
+  .card-head-primary{flex:1;min-width:0}
+  .card-posting{font-size:12px}
+  .status-badge{order:2;font-size:11.5px}
+  .card-head-time{order:3;width:100%;justify-content:space-between;font-size:11px;color:#8e9bab}
+  .card-head-time .sync-time::before{display:none}
+  .product-info h3{font-size:13.5px;margin-bottom:5px}
+  .meta{font-size:11.5px;gap:2px}
+  .order-products-summary{margin:8px 0 0}
+  .price-row{display:flex;align-self:stretch;justify-content:space-between;max-width:none;margin:10px 0 0;padding:7px 10px;gap:6px 10px}
+  .price-val{font-size:13px}
+  .card-profit{border-left:0;padding-left:0;border-top:1px solid #eef2f7;padding-top:11px;flex-direction:row;align-items:center;justify-content:space-between;gap:10px;flex-wrap:nowrap}
+  .profit-summary{flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:4px 9px;text-align:left;min-width:0}
+  .profit-caption{display:none}
+  .card-profit strong{font-size:22px}
+  .card-profit small{margin-left:0;font-size:11.5px}
+  .card-profit button{flex-shrink:0;padding:7px 11px}
+}

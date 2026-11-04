@@ -100,9 +100,18 @@ def ensure_schema(db):
         CREATE TABLE IF NOT EXISTS profit_title_product_context (
             shop TEXT NOT NULL,product_key TEXT NOT NULL,category_path TEXT NOT NULL,checked REAL NOT NULL,
             PRIMARY KEY(shop,product_key));
+        CREATE TABLE IF NOT EXISTS profit_purchase_sources (
+            line_id INTEGER PRIMARY KEY,origin TEXT NOT NULL,source_line_id INTEGER,
+            recorded_at REAL NOT NULL,source_purchase_unit TEXT);
     ''')
     if 'provider' not in {r[1] for r in db.execute('PRAGMA table_info(profit_translation_requests)')}:
         db.execute("ALTER TABLE profit_translation_requests ADD COLUMN provider TEXT NOT NULL DEFAULT 'MyMemory'")
+    # Existing saved costs predate provenance tracking. API synchronization also
+    # changes lines.updated, so it cannot identify the last human purchase price.
+    db.execute('''INSERT OR IGNORE INTO profit_purchase_sources
+        SELECT l.id,'manual',NULL,COALESCE(i.updated,o.created),NULL
+        FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+        LEFT JOIN profit_inputs i ON i.order_id=o.id WHERE l.purchase_unit IS NOT NULL''')
 
 @contextlib.contextmanager
 def connection(path):
@@ -131,6 +140,48 @@ def cached_product_image(db, shop, offer_id='', sku=''):
         WHERE o.shop=? AND l.image_url!='' AND ('''+ ' OR '.join(conditions)+
         ') ORDER BY l.updated DESC LIMIT 1', args).fetchone()
     return row[0] if row else ''
+
+
+def latest_purchase_price(db, shop, offer_id='', sku='', exclude_line_id=-1):
+    field,value=('offer_id',offer_id) if offer_id else ('sku',sku)
+    if not value: return None
+    return db.execute('''SELECT l.id,l.purchase_unit,o.posting,
+        COALESCE(s.recorded_at,i.updated,o.created) AS price_recorded_at
+        FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+        LEFT JOIN profit_inputs i ON i.order_id=o.id
+        LEFT JOIN profit_purchase_sources s ON s.line_id=l.id
+        WHERE o.shop=? AND l.'''+field+'''=? AND l.id<>?
+        AND l.purchase_unit IS NOT NULL AND trim(l.purchase_unit)!=''
+        AND COALESCE(s.origin,'manual')='manual'
+        AND lower(o.status) NOT IN ('cancelled','canceled','returned')
+        ORDER BY COALESCE(s.recorded_at,i.updated,o.created) DESC,o.created DESC,l.id DESC LIMIT 1''',
+        (shop,value,exclude_line_id)).fetchone()
+
+
+def inherit_purchase_prices(db, now=None, shop=None):
+    """Snapshot the latest human-entered unit cost into unfilled active lines."""
+    now=time.time() if now is None else now
+    query='''SELECT l.id,l.offer_id,l.sku,o.shop FROM profit_lines l
+        JOIN profit_orders o ON o.id=l.order_id
+        LEFT JOIN profit_purchase_sources s ON s.line_id=l.id
+        WHERE l.purchase_unit IS NULL AND s.line_id IS NULL
+        AND lower(o.status) NOT IN ('cancelled','canceled','returned')'''
+    args=[]
+    if shop is not None: query+=' AND o.shop=?';args.append(shop)
+    filled=[]
+    for line in db.execute(query,args).fetchall():
+        prior=latest_purchase_price(db,line['shop'],line['offer_id'],line['sku'],line['id'])
+        if prior is None: continue
+        try: cost=number(prior['purchase_unit'],'历史采购单价',allow_blank=True)
+        except ValueError: continue
+        if cost is None: continue
+        value=str(cost)
+        updated=db.execute('UPDATE profit_lines SET purchase_unit=? WHERE id=? AND purchase_unit IS NULL',(value,line['id']))
+        if not updated.rowcount: continue
+        db.execute('INSERT INTO profit_purchase_sources VALUES (?,\'inherited\',?,?,?)',
+            (line['id'],prior['id'],now,value))
+        filled.append(dict(line_id=line['id'],source_line_id=prior['id'],purchase_unit=value))
+    return filled
 
 
 def capture_postings(db, shop, source, postings, now):
@@ -181,6 +232,7 @@ def capture_postings(db, shop, source, postings, now):
                 weight_g=COALESCE(excluded.weight_g,profit_lines.weight_g),updated=excluded.updated''',
                 (order_id,key,sku,offer,str(item.get('name') or key),quantity,price,str(currency),
                  str(weight) if weight is not None else None,picture,now))
+    inherit_purchase_prices(db,now,shop['id'])
 
 def recommend_template(revenue, weight):
     # User-confirmed worksheet rules (2026-11-01), using CNY package revenue
@@ -254,8 +306,15 @@ def load_order(db, order_id):
     order = dict(row)
     order['lines'] = [dict(r) for r in db.execute('''SELECT l.*,COALESCE(t.zh_text,'') AS name_zh,
         COALESCE(t.provider,'') AS translation_provider,COALESCE(t.last_error,'') AS translation_error,
-        COALESCE(t.next_attempt,0) AS translation_retry_at FROM profit_lines l
-        LEFT JOIN profit_title_translations t ON t.source_text=l.name WHERE l.order_id=? ORDER BY l.id''',(order_id,))]
+        COALESCE(t.next_attempt,0) AS translation_retry_at,
+        COALESCE(s.origin,'') AS purchase_origin,s.source_line_id AS purchase_source_line_id,
+        s.source_purchase_unit AS inherited_purchase_unit,
+        COALESCE(source_order.posting,'') AS purchase_source_posting FROM profit_lines l
+        LEFT JOIN profit_title_translations t ON t.source_text=l.name
+        LEFT JOIN profit_purchase_sources s ON s.line_id=l.id
+        LEFT JOIN profit_lines source_line ON source_line.id=s.source_line_id
+        LEFT JOIN profit_orders source_order ON source_order.id=source_line.order_id
+        WHERE l.order_id=? ORDER BY l.id''',(order_id,))]
     detail=db.execute('SELECT * FROM profit_order_status_details WHERE order_id=?',(order_id,)).fetchone()
     order['substatus']=detail['substatus'] if detail and detail['top_status']==order['status'] else ''
     order['provider_status']=detail['provider_status'] if detail and detail['top_status']==order['status'] else ''
@@ -266,10 +325,8 @@ def load_order(db, order_id):
     row = db.execute('SELECT * FROM profit_inputs WHERE order_id=?',(order_id,)).fetchone()
     order['inputs'] = dict(row) if row else dict(template='auto',rate=None,forwarder='2',other_cost='0',weight_override=None)
     for line in order['lines']:
-        previous = db.execute('''SELECT l.purchase_unit FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
-            WHERE l.offer_id=? AND l.id<>? AND o.shop=? AND l.purchase_unit IS NOT NULL
-            ORDER BY l.updated DESC LIMIT 1''',(line['offer_id'],line['id'],order['shop'])).fetchone() if line['offer_id'] else None
-        line['previous_cost'] = previous[0] if previous else None
+        previous=latest_purchase_price(db,order['shop'],line['offer_id'],line['sku'],line['id'])
+        line['previous_cost'] = previous['purchase_unit'] if previous else None
     order['calculation'] = calculate(order)
     return order
 
@@ -325,6 +382,15 @@ def save_order(db, order, now=None, source='web-save'):
         db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,?,?,?)',
                    (order['id'],old_weight,new_weight,now,source))
     for line in order['lines']:
+        previous=db.execute('SELECT purchase_unit FROM profit_lines WHERE id=? AND order_id=?',
+            (line['id'],order['id'])).fetchone()
+        if previous is None: raise ValueError('商品明细已变化，请刷新后重新填写')
+        if number(previous['purchase_unit'],'原采购单价',allow_blank=True)!=number(line['purchase_unit'],'采购单价',allow_blank=True):
+            db.execute('''INSERT INTO profit_purchase_sources VALUES (?,'manual',NULL,?,NULL)
+                ON CONFLICT(line_id) DO UPDATE SET origin='manual',source_line_id=NULL,
+                recorded_at=excluded.recorded_at,source_purchase_unit=NULL''',(line['id'],now))
+            line.update(purchase_origin='manual',purchase_source_line_id=None,
+                inherited_purchase_unit=None,purchase_source_posting='')
         db.execute('UPDATE profit_lines SET purchase_unit=?,price_override=?,updated=? WHERE id=? AND order_id=?',
                    (line['purchase_unit'],line['price_override'],now,line['id'],order['id']))
     p=order['inputs']
@@ -332,6 +398,7 @@ def save_order(db, order, now=None, source='web-save'):
         VALUES (?,?,?,?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET weight_override=excluded.weight_override,
         template=excluded.template,rate=excluded.rate,forwarder=excluded.forwarder,other_cost=excluded.other_cost,updated=excluded.updated''',
         (order['id'],p.get('weight_override'),p.get('template','auto'),p.get('rate'),p.get('forwarder','2'),p.get('other_cost','0'),now))
+    inherit_purchase_prices(db,now,order['shop'])
 
 def entry_url(settings_path=None):
     path = Path(settings_path) if settings_path else Path(__file__).with_name('profit-web.json')
