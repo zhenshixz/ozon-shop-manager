@@ -75,16 +75,28 @@ async function showDetails(rid,sid='',open=false){
 function message(text,bad=false){$('notice').hidden=false;$('notice').className='notice'+(bad?' bad':'');$('notice').textContent=text;}
 async function api(path,data){const r=await fetch(base+path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},...(data?{body:JSON.stringify(data)}:{})});const body=await r.json();if(r.status===401){$('gate').hidden=false;$('workspace').hidden=true;$('logout').hidden=true;}if(!r.ok)throw new Error(body.error||'请求失败，请稍后再试');return body;}
 function latest(sid){for(const run of state.runs){if(run.shops.includes(sid)){const item=run.result.find(s=>s.shop===sid);return{run,item,status:run.status==='error'&&(!item||item.status==='running')?'error':item?.status||run.status};}}return null;}
-function activityNames(batches){
+function historyShopName(run,sid){return run.result.find(s=>s.shop===sid)?.name||state.shops.find(s=>s.id===sid)?.name||sid;}
+function historyShops(run){
+ return `<div class="history-shops"><span>参与店铺</span>${run.shops.map(sid=>{const result=run.result.find(s=>s.shop===sid);const unfinished=!result||['running','queued'].includes(result.status);const failed=result?.status==='error'||(unfinished&&!['running','queued'].includes(run.status));const suffix=failed?(result?.status==='error'?'需关注':'未完成'):unfinished?(result?label[result.status]||'待处理':'待处理'):'';return `<button type="button" class="history-shop-name ${failed?'shop-needs-attention':''}" data-run="${esc(run.id)}" data-sid="${esc(sid)}">${esc(historyShopName(run,sid))}${suffix?` · ${suffix}`:''}</button>`;}).join('')}</div>`;
+}
+function activityOwners(activity,runId){
+ if(!runId||!activity.shops.size)return '';
+ return `<div class="activity-owners">${[...activity.shops.values()].map(s=>`<button type="button" class="activity-owner ${s.error?'owner-error':s.pending?'owner-pending':''}" data-run="${esc(runId)}" data-sid="${esc(s.id)}"><b>${esc(s.name)}</b><span>${s.removed?`移除 ${s.removed} 条`:s.error||s.pending?'未确认移除':'无待加入'}${s.error?' · 需核对':s.pending?' · 核对中':''}</span></button>`).join('')}</div>`;
+}
+function activityNames(batches,runId=''){
  const grouped=new Map();
  for(const batch of batches||[]){
   const key=batch.action_id??batch.title;if(!key)continue;
-  if(!grouped.has(key))grouped.set(key,{title:batch.title||`活动 ${batch.action_id}`,removed:0,dates:new Set(),error:false,pending:false});
+  if(!grouped.has(key))grouped.set(key,{title:batch.title||`活动 ${batch.action_id}`,removed:0,dates:new Set(),error:false,pending:false,shops:new Map()});
   const item=grouped.get(key);item.removed+=batch.removed||0;if(batch.date)item.dates.add(batch.date);
   item.error||=batch.status==='error';item.pending||=!['ok','error'].includes(batch.status);
+  if(batch.shop_id){
+   if(!item.shops.has(batch.shop_id))item.shops.set(batch.shop_id,{id:batch.shop_id,name:batch.shop_name,removed:0,error:false,pending:false});
+   const shop=item.shops.get(batch.shop_id);shop.removed+=batch.removed||0;shop.error||=batch.status==='error';shop.pending||=!['ok','error'].includes(batch.status);
+  }
  }
  if(!grouped.size)return '';
- return `<div class="activity-list"><span class="activity-caption">本次活动</span>${[...grouped.values()].map(a=>`<div class="activity-item"><div class="activity-name">${esc(a.title)}</div><span class="activity-outcome ${a.error?'activity-error':''}">${a.error?'需核对 · ':a.pending?'核对中 · ':''}${a.removed?`已移除 ${a.removed} 条`:a.error||a.pending?'尚未确认移除':'无待加入商品'}</span><small>计划加入：${[...a.dates].sort().map(d=>esc(stamp(d))).join('、')}（北京时间）</small></div>`).join('')}</div>`;
+ return `<div class="activity-list"><span class="activity-caption">本次活动</span>${[...grouped.values()].map(a=>`<div class="activity-item"><div class="activity-name">${esc(a.title)}</div><span class="activity-outcome ${a.error?'activity-error':''}">${a.error?'需核对 · ':a.pending?'核对中 · ':''}${a.removed?`已移除 ${a.removed} 条`:a.error||a.pending?'尚未确认移除':'无待加入商品'}</span><small>计划加入：${[...a.dates].sort().map(d=>esc(stamp(d))).join('、')}（北京时间）</small>${activityOwners(a,runId)}</div>`).join('')}</div>`;
 }
 function selection(){const count=selected.size;$('selection-count').textContent=`已选择 ${count} 家`;$('run').disabled=!count||active||busy;$('run').textContent=active?'任务执行中':`立即执行${count?' · '+count+' 家':''}`;$('select-all').checked=count===state.shops.length&&count>0;$('select-all').indeterminate=count>0&&count<state.shops.length;}
 function render(){
@@ -100,7 +112,7 @@ function render(){
  const names=state.shops.filter(s=>state.plan.shops.includes(s.id)).map(s=>s.name);$('saved-scope').textContent=names.join('、')||'尚未选择';
  const scheduledToday=state.runs.some(r=>r.source==='schedule'&&day(r.created)===day(state.now));
  if(state.plan.enabled){const nowHH=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(state.now*1000));const due=nowHH>=state.plan.time;const skipped=state.plan.last_day===day(state.now);$('metric-next').textContent=(!due?'今天 ':due&&!skipped?'等待执行 · ':'明天 ')+state.plan.time;$('saved-time').textContent=due&&!skipped&&!scheduledToday?'今日计划时间已到，等待调度；超过两分钟未启动请检查服务。':`每天 ${state.plan.time} · ${names.length} 家店铺`;}else{$('metric-next').textContent='未启用';$('saved-time').textContent='每日计划已暂停，可单独手动执行。';}
- $('history').innerHTML=state.runs.length?state.runs.map(r=>`<div class="history-entry"><div class="history-row"><span class="badge ${esc(r.status)}">${label[r.status]||'需关注'}</span><div class="history-main"><strong>${r.source==='schedule'?'每日计划':'手动清理'} · ${r.shops.length} 家店铺 · 移除 ${r.result.reduce((n,s)=>n+(s.removed||0),0)} 条</strong><small>${stamp(r.created)}${r.finished?' — '+stamp(r.finished):''}</small></div><button class="text-button" data-run="${esc(r.id)}">活动与商品 ↗</button></div>${activityNames(r.result.flatMap(s=>s.batches||[]))}</div>`).join(''):'<div class="empty"><b>◷</b>还没有运行记录<br>选择店铺后可手动执行，或设置每日计划。</div>';
+ $('history').innerHTML=state.runs.length?state.runs.map(r=>`<div class="history-entry"><div class="history-row"><span class="badge ${esc(r.status)}">${label[r.status]||'需关注'}</span><div class="history-main"><strong>${r.source==='schedule'?'每日计划':'手动清理'} · ${r.shops.length===1?esc(historyShopName(r,r.shops[0])):r.shops.length+' 家店铺'} · 移除 ${r.result.reduce((n,s)=>n+(s.removed||0),0)} 条</strong><small>${stamp(r.created)}${r.finished?' — '+stamp(r.finished):''}</small></div><button class="text-button" data-run="${esc(r.id)}">活动与商品 ↗</button></div>${historyShops(r)}${activityNames(r.result.flatMap(s=>(s.batches||[]).map(b=>({...b,shop_id:s.shop,shop_name:s.name||historyShopName(r,s.shop)}))),r.id)}</div>`).join(''):'<div class="empty"><b>◷</b>还没有运行记录<br>选择店铺后可手动执行，或设置每日计划。</div>';
  $('last-refresh').textContent='状态更新于 '+stamp(state.now);selection();
 }
 async function load(){try{const next=await api('state');const first=!state;state=next;csrf=state.csrf;if(first){selected=new Set(state.plan.shops);$('enabled').checked=state.plan.enabled;$('time').value=state.plan.time;}$('gate').hidden=true;$('workspace').hidden=false;$('logout').hidden=false;render();if($('detail').open)showDetails($('detail').dataset.run,$('detail').dataset.sid);}catch(e){if(state)message(e.message,true);}}
