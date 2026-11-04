@@ -260,3 +260,7 @@
   .card-profit small{margin-left:0;font-size:11.5px}
   .card-profit button{flex-shrink:0;padding:7px 11px}
 }
+.product-title-link{color:inherit;text-decoration:none;border-radius:3px}
+.product-title-link:hover{color:var(--blue);text-decoration:underline;text-underline-offset:3px}
+.product-title-link:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
+.product-title-arrow{color:#7183a0;font-size:.85em;white-space:nowrap}
