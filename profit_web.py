@@ -170,6 +170,8 @@ def create_app(settings=None):
             result=compass_core.build(db,request.args.get('shop',''),request.args.get('from',''),request.args.get('to',''),request.args.get('q',''),settings.get('operating_start_date','2026-10-24'),shops=available_shops(db))
         return jsonify(result)
 
+    import promotions
+    promotions.register(app)
     return app
 
 if __name__=='__main__':

@@ -8,6 +8,7 @@ __pycache__/
 # Local archive: credentials and runtime files must stay out of Git.
 /profit-web.json
 /title-translation.json
+/promo-access.json
 **/__pycache__/
 *.pyo
 *.sqlite*

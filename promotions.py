@@ -1,0 +1,353 @@
+"""Official Ozon future-auto-add cleanup; private UI, durable jobs and opt-in timer."""
+import argparse
+import datetime as dt
+import hmac
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import sqlite3
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+ROOT = Path(__file__).resolve().parent
+TZ = dt.timezone(dt.timedelta(hours=8))
+READ_LIST = '/v2/actions/auto-add/products/list'
+DELETE = '/v2/actions/auto-add/products/delete'
+
+
+def shops():
+    config = json.loads((ROOT/'config.json').read_text(encoding='utf-8-sig'))
+    return {s['id']: s for s in config['shops'] if s.get('enabled', True)}
+
+
+def db():
+    folder = ROOT/'data'/'promotions'
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    c = sqlite3.connect(folder/'state.sqlite3', timeout=10)
+    c.row_factory = sqlite3.Row
+    c.executescript('''CREATE TABLE IF NOT EXISTS settings(owner TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,owner TEXT NOT NULL,created REAL NOT NULL,
+      finished REAL,status TEXT NOT NULL,source TEXT NOT NULL,shops TEXT NOT NULL,result TEXT NOT NULL DEFAULT '[]',pid INTEGER);''')
+    return c
+
+
+def reconcile(c):
+    for row in c.execute("SELECT * FROM runs WHERE status IN ('queued','running')").fetchall():
+        alive = False
+        if row['pid']:
+            try:
+                cmd = Path(f"/proc/{row['pid']}/cmdline").read_bytes()
+                alive = b'promotions.py' in cmd and (row['id'].encode() in cmd or b'--tick' in cmd)
+            except OSError:
+                pass
+        if (row['status']=='running' and not alive) or (row['status']=='queued' and time.time()-row['created']>90):
+            c.execute("UPDATE runs SET status='error',finished=? WHERE id=?", (time.time(),row['id']))
+
+
+def plan(c):
+    row = c.execute("SELECT value FROM settings WHERE owner='self'").fetchone()
+    return json.loads(row[0]) if row else dict(enabled=False, time='09:00', shops=[], last_day='')
+
+
+def api(shop, path, payload=None):
+    if path not in ('/v1/actions', READ_LIST, DELETE):
+        raise ValueError('禁止调用其他接口')
+    req = urllib.request.Request('https://api-seller.ozon.ru'+path,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={'Client-Id': str(shop['client_id']), 'Api-Key': shop['api_key'], 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=35) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        # Never persist headers, credentials or arbitrary upstream response bodies.
+        raise ValueError(f'Ozon 接口 HTTP {e.code}，请检查凭证权限或稍后重试') from None
+    except Exception:
+        raise ValueError('Ozon 请求未完成；写请求不自动重试，请检查剩余队列') from None
+
+
+def future(value):
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+        return parsed.tzinfo is not None and parsed.timestamp() > time.time()
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('Ozon 返回的自动加入日期无法识别') from None
+
+
+def queue(shop, aid, date, call=api):
+    items, offset, total = [], 0, None
+    for _ in range(100):
+        r = call(shop, READ_LIST, dict(action_id=aid, auto_add_date=date, limit=100, offset=offset))
+        page = r['products']
+        if total is not None and r['total'] != total:
+            raise ValueError('队列在读取期间变化，请重新检查')
+        total = r['total']; items.extend(page)
+        if len(items) == total:
+            if len({p['product_id'] for p in items}) != total:
+                raise ValueError('队列商品重复，已停止')
+            return items
+        if not page or len(items) > total:
+            break
+        offset += len(page)
+    raise ValueError('队列未完整读取，未执行后续删除')
+
+
+def clean(shop, audit, progress, call=api):
+    actions = call(shop, '/v1/actions')['result']
+    result = dict(shop=shop['id'], name=shop['name'], status='running', activities=len(actions),
+                  removed=0, batches=[], error='')
+    progress(result)
+    for action in actions:
+        for date in dict.fromkeys(action.get('auto_add_dates') or []):
+            if not future(date):
+                continue
+            batch = dict(action_id=action['id'], title=action['title'], date=date,
+                         before=0, removed=0, remaining=None, status='checking')
+            result['batches'].append(batch)
+            try:
+                items = queue(shop, action['id'], date, call)
+                batch['before'] = len(items)
+                audit(dict(stage='snapshot', action_id=action['id'], date=date, products=items))
+                ids = [p['product_id'] for p in items]
+                if ids and not future(date):
+                    raise ValueError('计划加入时间已到，未执行删除')
+                for start in range(0, len(ids), 1000):
+                    if not future(date):
+                        raise ValueError('计划加入时间已到，未继续删除')
+                    payload = dict(action_id=action['id'], auto_add_date=date, product_ids=ids[start:start+1000])
+                    audit(dict(stage='delete-prepared', payload=payload))
+                    response = call(shop, DELETE, payload)
+                    audit(dict(stage='delete-response', response=response))
+                    removed = response.get('product_ids', [])
+                    confirmed = len(set(removed) & set(payload['product_ids']))
+                    batch['removed'] += confirmed
+                    result['removed'] += confirmed
+                    if set(removed) != set(payload['product_ids']):
+                        raise ValueError('接口未确认全部移除，请核对剩余队列')
+                remaining = queue(shop, action['id'], date, call)
+                batch.update(remaining=len(remaining), status='ok' if not remaining else 'error')
+                if remaining:
+                    raise ValueError('仍有待加入商品，需重新检查')
+            except Exception as e:
+                batch.update(status='error', error=str(e) if isinstance(e, ValueError) else '接口数据异常，已停止本店处理')
+                result.update(status='error', error=batch['error'])
+                progress(result)
+                return result
+            progress(result)
+    # Discover again: a new activity/date appearing during the run must not be
+    # silently counted as a completed whole-shop cleanup.
+    final = call(shop, '/v1/actions')['result']
+    expected = {(a['id'], d) for a in actions for d in (a.get('auto_add_dates') or []) if future(d)}
+    actual = {(a['id'], d) for a in final for d in (a.get('auto_add_dates') or []) if future(d)}
+    if actual - expected:
+        result.update(status='error', error='执行期间出现新的待加入活动批次，请再次运行检查')
+    else:
+        result['status'] = 'ok'
+    progress(result)
+    return result
+
+
+def enqueue(ids, source='manual'):
+    available = shops()
+    if not isinstance(ids, list) or not ids or any(not isinstance(s, str) or s not in available for s in ids):
+        raise ValueError('请选择有效店铺')
+    ids = list(dict.fromkeys(ids))
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        reconcile(c)
+        if c.execute("SELECT 1 FROM runs WHERE status IN ('queued','running')").fetchone():
+            raise ValueError('已有任务正在执行，请等待完成')
+        rid = secrets.token_hex(12)
+        c.execute('INSERT INTO runs(id,owner,created,status,source,shops) VALUES(?,?,?,?,?,?)',
+                  (rid, 'self', time.time(), 'queued', source, json.dumps(ids)))
+    return rid
+
+
+def launch(rid):
+    try:
+        subprocess.Popen([sys.executable, str(ROOT/'promotions.py'), '--worker', rid],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True)
+    except Exception:
+        with db() as c:
+            c.execute("UPDATE runs SET status='error',finished=? WHERE id=?", (time.time(), rid))
+        raise ValueError('任务启动失败') from None
+
+
+def worker(rid):
+    import fcntl
+    os.umask(0o077)
+    with db() as c:
+        row = c.execute("SELECT * FROM runs WHERE id=? AND status='queued'", (rid,)).fetchone()
+    if not row:
+        return
+    lock = open(ROOT/'data'/'promotions'/'worker.lock', 'a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        with db() as c:
+            c.execute("UPDATE runs SET status='error',finished=? WHERE id=?", (time.time(), rid))
+        return
+    results = []
+    try:
+        with db() as c:
+            c.execute("UPDATE runs SET status='running',pid=? WHERE id=?", (os.getpid(),rid))
+        available = shops()
+        folder = ROOT/'data'/'promotions'/rid
+        folder.mkdir(mode=0o700)
+        for sid in json.loads(row['shops']):
+            current = dict(shop=sid, name=available.get(sid, {}).get('name', sid), status='running', removed=0, batches=[])
+            results.append(current)
+
+            def progress(value):
+                results[-1] = value
+                with db() as c:
+                    c.execute('UPDATE runs SET result=? WHERE id=?', (json.dumps(results, ensure_ascii=False), rid))
+
+            def audit(value):
+                with (folder/(hashlib.sha256(sid.encode()).hexdigest()+'.jsonl')).open('a', encoding='utf-8') as f:
+                    f.write(json.dumps(dict(at=time.time(), **value), ensure_ascii=False)+'\n')
+
+            try:
+                if sid not in available:
+                    raise ValueError('店铺已停用或不存在')
+                clean(available[sid], audit, progress)
+            except Exception as e:
+                current = results[-1]
+                current.update(status='error', error=str(e) if isinstance(e, ValueError) else '处理异常，请检查任务记录')
+                progress(current)
+        status = 'ok' if all(r['status']=='ok' for r in results) else 'error'
+    except Exception:
+        status = 'error'
+    finally:
+        with db() as c:
+            c.execute('UPDATE runs SET status=?,finished=?,result=? WHERE id=?',
+                      (status, time.time(), json.dumps(results, ensure_ascii=False), rid))
+        lock.close()
+
+
+def tick():
+    # Installed timers are harmless until the owner explicitly enables a plan.
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        reconcile(c)
+        p = plan(c); now = dt.datetime.now(TZ)
+        if not p['enabled'] or not p['shops'] or now.strftime('%H:%M') < p['time'] or p.get('last_day') == now.date().isoformat():
+            return
+        if c.execute("SELECT 1 FROM runs WHERE status IN ('queued','running')").fetchone():
+            return
+        ids = p['shops']
+        rid = secrets.token_hex(12)
+        c.execute('INSERT INTO runs(id,owner,created,status,source,shops) VALUES(?,?,?,?,?,?)',
+                  (rid,'self',time.time(),'queued','schedule',json.dumps(ids)))
+        p['last_day'] = now.date().isoformat()
+        c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', ('self', json.dumps(p)))
+    worker(rid)
+
+
+def register(app):
+    from flask import Blueprint, request, session, jsonify, send_from_directory
+    from werkzeug.security import check_password_hash
+    bp = Blueprint('promotions', __name__, url_prefix='/ozon-profit/promotions')
+    attempts = []
+
+    @bp.before_request
+    def guard():
+        if not request.path.startswith('/ozon-profit/promotions/api/'):
+            return
+        if request.method == 'POST' and request.headers.get('Origin') not in (None, request.host_url.rstrip('/')):
+            return jsonify(error='请求来源不正确'), 403
+        if request.path.endswith('/login'):
+            return
+        if not session.get('promotions_authorized'):
+            return jsonify(error='请输入促销工具访问口令'), 401
+        if request.method == 'POST':
+            if not hmac.compare_digest(request.headers.get('X-CSRF-Token', ''), session.get('promotions_csrf', '!')):
+                return jsonify(error='页面已过期，请刷新'), 403
+            if request.headers.get('Origin') not in (None, request.host_url.rstrip('/')):
+                return jsonify(error='请求来源不正确'), 403
+
+    @bp.get('/')
+    def index():
+        return send_from_directory(ROOT/'web', 'promotions.html')
+
+    @bp.get('/assets/<name>')
+    def assets(name):
+        if name not in ('promotions.css', 'promotions.js'):
+            return '', 404
+        return send_from_directory(ROOT/'web', name)
+
+    @bp.post('/api/login')
+    def login():
+        now=time.time(); attempts[:] = [t for t in attempts if t > now-300]
+        if len(attempts) >= 10:
+            return jsonify(error='尝试过多，请5分钟后再试'), 429
+        data = request.get_json(silent=True) or {}
+        password = data.get('password', '') if isinstance(data, dict) else ''
+        config = ROOT/'promo-access.json'
+        if not config.exists():
+            return jsonify(error='管理员尚未配置访问口令'), 503
+        if not isinstance(password,str) or len(password)>200 or not check_password_hash(json.loads(config.read_text())['password_hash'], password):
+            attempts.append(now)
+            return jsonify(error='访问口令不正确'), 401
+        session['promotions_authorized'] = True
+        session['promotions_csrf'] = secrets.token_urlsafe(24)
+        session.permanent = True
+        return jsonify(ok=True)
+
+    @bp.get('/api/state')
+    def state():
+        with db() as c:
+            reconcile(c)
+            p = plan(c)
+            rows = c.execute("SELECT * FROM runs WHERE owner='self' ORDER BY created DESC LIMIT 60").fetchall()
+        runs = [dict(r) for r in rows]
+        for r in runs:
+            r['shops'] = json.loads(r['shops']); r['result'] = json.loads(r['result'])
+        return jsonify(csrf=session['promotions_csrf'], plan=p, runs=runs,
+                       shops=[dict(id=s['id'],name=s['name']) for s in shops().values()], now=time.time())
+
+    @bp.post('/api/plan')
+    def save_plan():
+        data = request.get_json(silent=True)
+        if not isinstance(data,dict) or type(data.get('enabled')) is not bool or not isinstance(data.get('time'),str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d',data['time']):
+            raise ValueError('计划格式不正确')
+        ids=data.get('shops'); available=shops()
+        if not isinstance(ids,list) or any(not isinstance(s,str) or s not in available for s in ids) or (data['enabled'] and not ids):
+            raise ValueError('请选择有效店铺')
+        with db() as c:
+            p=plan(c)
+            if data['enabled'] and (not p['enabled'] or p['time']!=data['time']):
+                now=dt.datetime.now(TZ)
+                p['last_day']=now.date().isoformat() if now.strftime('%H:%M')>=data['time'] else ''
+            p.update(enabled=data['enabled'], time=data['time'], shops=list(dict.fromkeys(ids)))
+            c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',('self',json.dumps(p)))
+        return jsonify(ok=True)
+
+    @bp.post('/api/run')
+    def run():
+        data=request.get_json(silent=True)
+        if not isinstance(data,dict) or data.get('confirm') is not True:
+            raise ValueError('请确认仅清理待自动加入队列')
+        rid=enqueue(data.get('shops')); launch(rid)
+        return jsonify(id=rid), 202
+
+    @bp.post('/api/logout')
+    def logout():
+        session.pop('promotions_authorized',None); session.pop('promotions_csrf',None)
+        return jsonify(ok=True)
+
+    app.register_blueprint(bp)
+
+
+if __name__ == '__main__':
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--worker'); parser.add_argument('--tick',action='store_true')
+    args=parser.parse_args()
+    if args.worker: worker(args.worker)
+    elif args.tick: tick()
