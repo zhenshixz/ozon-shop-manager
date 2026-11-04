@@ -10,6 +10,24 @@ import promotions as p
 
 
 class PromotionsTests(unittest.TestCase):
+    def test_public_access_needs_no_password_but_keeps_request_protection(self):
+        from flask import Flask
+        with tempfile.TemporaryDirectory() as folder,patch.object(p,'ROOT',Path(folder)),patch.object(p,'launch') as launch:
+            root=Path(folder)
+            (root/'config.json').write_text(json.dumps(dict(shops=[dict(id='custom',name='测试店',api_key='not-for-browser')])) )
+            (root/'promo-access.json').write_text(json.dumps(dict(public_access=True,password_hash='retained')))
+            app=Flask(__name__);app.secret_key='test';p.register(app)
+            client=app.test_client();response=client.get('/ozon-profit/promotions/api/state')
+            self.assertEqual(response.status_code,200);self.assertTrue(response.json['public_access'])
+            self.assertNotIn('not-for-browser',response.get_data(as_text=True))
+            url='/ozon-profit/promotions/api/plan';data=dict(enabled=False,time='09:00',shops=[])
+            self.assertEqual(client.post(url,json=data).status_code,403)
+            headers={'X-CSRF-Token':response.json['csrf']}
+            self.assertEqual(client.post(url,json=data,headers={**headers,'Origin':'https://elsewhere.invalid'}).status_code,403)
+            self.assertEqual(client.post(url,json=data,headers=headers).status_code,200)
+            launch.assert_not_called()
+            with p.db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM runs').fetchone()[0],0)
+
     def test_discovers_unseen_actions_dates_pagination_and_keeps_other_products(self):
         future=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=7)).isoformat()
         past=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=7)).isoformat()

@@ -304,6 +304,12 @@ def register(app):
     bp = Blueprint('promotions', __name__, url_prefix='/ozon-profit/promotions')
     attempts = []
 
+    def public_access():
+        try:
+            return json.loads((ROOT/'promo-access.json').read_text()).get('public_access') is True
+        except (OSError,ValueError,TypeError):
+            return False
+
     @bp.before_request
     def guard():
         if not request.path.startswith('/ozon-profit/promotions/api/'):
@@ -312,7 +318,9 @@ def register(app):
             return jsonify(error='请求来源不正确'), 403
         if request.path.endswith('/login'):
             return
-        if not session.get('promotions_authorized'):
+        if public_access():
+            session.setdefault('promotions_csrf',secrets.token_urlsafe(24))
+        elif not session.get('promotions_authorized'):
             return jsonify(error='请输入促销工具访问口令'), 401
         if request.method == 'POST':
             if not hmac.compare_digest(request.headers.get('X-CSRF-Token', ''), session.get('promotions_csrf', '!')):
@@ -360,7 +368,7 @@ def register(app):
             # Product lists are fetched on demand rather than every five seconds.
             for shop in r['result']:
                 for batch in shop.get('batches',[]):batch.pop('products',None)
-        return jsonify(csrf=session['promotions_csrf'], plan=p, runs=runs,
+        return jsonify(csrf=session['promotions_csrf'], public_access=public_access(), plan=p, runs=runs,
                        shops=[dict(id=s['id'],name=s['name']) for s in shops().values()], now=time.time())
 
     @bp.get('/api/runs/<rid>')
