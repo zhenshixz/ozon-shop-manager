@@ -14,7 +14,7 @@ class PromotionsTests(unittest.TestCase):
         future=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=7)).isoformat()
         past=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=7)).isoformat()
         actions=[dict(id=i,title=f'活动{i}',auto_add_dates=[future,past]) for i in (900001,900002,900003,900004)]
-        data={i:[dict(product_id=n) for n in range(101 if i==900004 else 1)] for i in range(900001,900005)}
+        data={i:[dict(product_id=n,name=f'商品{n}',offer_id=f'货号{n}',sku=n+100) for n in range(101 if i==900004 else 1)] for i in range(900001,900005)}
         calls=[]; audit=[]; results=[]
         def fake(shop,path,payload=None):
             calls.append((path,payload))
@@ -33,15 +33,36 @@ class PromotionsTests(unittest.TestCase):
         self.assertTrue(any(path==p.READ_LIST and d['offset']==100 for path,d in calls))
         self.assertEqual({path for path,_ in calls},{'/v1/actions',p.READ_LIST,p.DELETE})
         self.assertEqual(len([a for a in audit if a['stage']=='snapshot']),4)
+        products=[product for batch in r['batches'] for product in batch['products']]
+        self.assertEqual(len(products),104)
+        self.assertTrue(all(x['status']=='removed' and x['name'] and x['offer_id'] for x in products))
 
     def test_partial_response_is_failure_not_whole_shop_success(self):
         date=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=1)).isoformat()
         def fake(shop,path,payload=None):
             if path=='/v1/actions':return dict(result=[dict(id=123,title='测试',auto_add_dates=[date])])
-            if path==p.READ_LIST:return dict(products=[dict(product_id=1)],total=1)
-            return dict(product_ids=[])
+            if path==p.READ_LIST:return dict(products=[dict(product_id=1),dict(product_id=2)],total=2)
+            return dict(product_ids=[1])
         r=p.clean(dict(id='a',name='a'),lambda v:None,lambda v:None,fake)
-        self.assertEqual(r['status'],'error'); self.assertEqual(r['removed'],0)
+        self.assertEqual(r['status'],'error'); self.assertEqual(r['removed'],1)
+        self.assertEqual([x['status'] for x in r['batches'][0]['products']],['removed','unconfirmed'])
+
+    def test_legacy_product_details_recovered_without_api_or_database_write(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as folder,patch.object(p,'ROOT',Path(folder)),patch.object(p,'api',side_effect=AssertionError('No network')):
+            rid='a'*24;sid='custom'
+            directory=Path(folder)/'data'/'promotions'/rid;directory.mkdir(parents=True)
+            events=[dict(stage='snapshot',action_id=7,date='future',products=[dict(product_id=1,name='商品一',offer_id='one'),dict(product_id=2,name='商品二')]),
+                    dict(stage='delete-prepared',payload=dict(action_id=7,auto_add_date='future',product_ids=[1])),
+                    dict(stage='delete-response',response=dict(product_ids=[1])),
+                    dict(stage='delete-prepared',payload=dict(action_id=7,auto_add_date='future',product_ids=[2]))]
+            path=directory/(hashlib.sha256(sid.encode()).hexdigest()+'.jsonl')
+            path.write_text('\n'.join(json.dumps(x) for x in events),encoding='utf-8')
+            original=path.read_bytes()
+            run=dict(id=rid,result=[dict(shop=sid,batches=[dict(action_id=7,date='future')])])
+            result=p.product_details(run)['result'][0]['batches'][0]['products']
+            self.assertEqual([x['status'] for x in result],['removed','unconfirmed'])
+            self.assertEqual(result[0]['offer_id'],'one');self.assertEqual(path.read_bytes(),original)
 
     def test_queue_change_during_pagination_fails_before_delete(self):
         def fake(shop,path,payload):
@@ -70,9 +91,18 @@ class PromotionsTests(unittest.TestCase):
                 self.assertEqual(client.post(url,json={'shops':['custom'],'confirm':True}).status_code,403)
                 headers={'X-CSRF-Token':state['csrf']}
                 self.assertEqual(client.post(url,json={'shops':['unknown'],'confirm':True},headers=headers).status_code,400)
-                self.assertEqual(client.post(url,json={'shops':['custom'],'confirm':True},headers=headers).status_code,202)
+                response=client.post(url,json={'shops':['custom'],'confirm':True},headers=headers)
+                self.assertEqual(response.status_code,202)
+                rid=response.json['id']
                 self.assertEqual(launch.call_count,1)
                 self.assertEqual(client.post(url,json={'shops':['custom'],'confirm':True},headers=headers).status_code,400)
+                product=dict(product_id=1,name='商品明细',offer_id='offer',status='removed')
+                with p.db() as c:
+                    c.execute('UPDATE runs SET result=? WHERE id=?',(json.dumps([dict(shop='custom',batches=[dict(action_id=1,date='future',products=[product])])]),rid))
+                self.assertNotIn('products',client.get('/ozon-profit/promotions/api/state').json['runs'][0]['result'][0]['batches'][0])
+                detail='/ozon-profit/promotions/api/runs/'+rid
+                self.assertEqual(app.test_client().get(detail).status_code,401)
+                self.assertEqual(client.get(detail).json['run']['result'][0]['batches'][0]['products'],[product])
 
     def test_daily_dispatch_runs_once_and_only_selected_shops(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(p,'ROOT',Path(folder)),patch.object(p,'worker') as worker:

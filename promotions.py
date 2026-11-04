@@ -97,6 +97,46 @@ def queue(shop, aid, date, call=api):
     raise ValueError('队列未完整读取，未执行后续删除')
 
 
+def product_record(item, status='not_removed'):
+    return {**{k:item.get(k, '') for k in ('product_id','offer_id','sku','name')}, 'status':status}
+
+
+def product_details(run):
+    """Enrich pre-feature history from existing private audits, without API calls."""
+    for shop in run['result']:
+        missing=[b for b in shop.get('batches',[]) if 'products' not in b]
+        if not missing:
+            continue
+        records={}; prepared=None
+        path=ROOT/'data'/'promotions'/run['id']/(hashlib.sha256(shop['shop'].encode()).hexdigest()+'.jsonl')
+        try:
+            with path.open(encoding='utf-8') as stream:
+                for line in stream:
+                    try: event=json.loads(line)
+                    except ValueError:
+                        prepared=None
+                        continue
+                    if event.get('stage')=='snapshot':
+                        key=(event['action_id'],event['date'])
+                        records[key]={p['product_id']:product_record(p) for p in event['products']}
+                    elif event.get('stage')=='delete-prepared':
+                        payload=event['payload'];key=(payload['action_id'],payload['auto_add_date'])
+                        prepared=(key,set(payload['product_ids']))
+                        for pid in prepared[1]:
+                            if pid in records.get(key,{}):records[key][pid]['status']='unconfirmed'
+                    elif event.get('stage')=='delete-response' and prepared:
+                        key,ids=prepared
+                        for pid in set(event['response'].get('product_ids',[])) & ids:
+                            if pid in records.get(key,{}):records[key][pid]['status']='removed'
+                        prepared=None
+        except (OSError,KeyError,TypeError):
+            pass
+        for batch in missing:
+            items=records.get((batch['action_id'],batch['date']))
+            if items is not None:batch['products']=list(items.values())
+    return run
+
+
 def clean(shop, audit, progress, call=api):
     actions = call(shop, '/v1/actions')['result']
     result = dict(shop=shop['id'], name=shop['name'], status='running', activities=len(actions),
@@ -112,6 +152,7 @@ def clean(shop, audit, progress, call=api):
             try:
                 items = queue(shop, action['id'], date, call)
                 batch['before'] = len(items)
+                batch['products'] = [product_record(item) for item in items]
                 audit(dict(stage='snapshot', action_id=action['id'], date=date, products=items))
                 ids = [p['product_id'] for p in items]
                 if ids and not future(date):
@@ -121,15 +162,22 @@ def clean(shop, audit, progress, call=api):
                         raise ValueError('计划加入时间已到，未继续删除')
                     payload = dict(action_id=action['id'], auto_add_date=date, product_ids=ids[start:start+1000])
                     audit(dict(stage='delete-prepared', payload=payload))
+                    for item in batch['products'][start:start+1000]:item['status']='unconfirmed'
                     response = call(shop, DELETE, payload)
                     audit(dict(stage='delete-response', response=response))
                     removed = response.get('product_ids', [])
                     confirmed = len(set(removed) & set(payload['product_ids']))
+                    confirmed_ids=set(removed) & set(payload['product_ids'])
+                    for item in batch['products'][start:start+1000]:
+                        if item['product_id'] in confirmed_ids:item['status']='removed'
                     batch['removed'] += confirmed
                     result['removed'] += confirmed
                     if set(removed) != set(payload['product_ids']):
                         raise ValueError('接口未确认全部移除，请核对剩余队列')
                 remaining = queue(shop, action['id'], date, call)
+                remaining_ids={p['product_id'] for p in remaining}
+                for item in batch['products']:
+                    if item['product_id'] in remaining_ids:item['status']='remaining'
                 batch.update(remaining=len(remaining), status='ok' if not remaining else 'error')
                 if remaining:
                     raise ValueError('仍有待加入商品，需重新检查')
@@ -309,8 +357,22 @@ def register(app):
         runs = [dict(r) for r in rows]
         for r in runs:
             r['shops'] = json.loads(r['shops']); r['result'] = json.loads(r['result'])
+            # Product lists are fetched on demand rather than every five seconds.
+            for shop in r['result']:
+                for batch in shop.get('batches',[]):batch.pop('products',None)
         return jsonify(csrf=session['promotions_csrf'], plan=p, runs=runs,
                        shops=[dict(id=s['id'],name=s['name']) for s in shops().values()], now=time.time())
+
+    @bp.get('/api/runs/<rid>')
+    def run_details(rid):
+        if not re.fullmatch(r'[a-f0-9]{24}',rid):
+            return jsonify(error='任务不存在'),404
+        with db() as c:
+            row=c.execute("SELECT * FROM runs WHERE id=? AND owner='self'",(rid,)).fetchone()
+        if not row:return jsonify(error='任务不存在'),404
+        result=dict(row)
+        result['shops']=json.loads(result['shops']);result['result']=json.loads(result['result'])
+        return jsonify(run=product_details(result))
 
     @bp.post('/api/plan')
     def save_plan():
