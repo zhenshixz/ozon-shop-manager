@@ -23,11 +23,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("inspect", "remove-pending", "test-current", "remove-current"))
     parser.add_argument("--report-dir", type=Path, required=True)
+    parser.add_argument("--approved-snapshot-dir", type=Path)
     args = parser.parse_args()
     if not args.report_dir.is_absolute() or ROOT in args.report_dir.parents:
         parser.error("Reports must be outside the deployment source tree")
     os.umask(0o077)
     args.report_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    approved = {}
+    if args.operation == "remove-pending":
+        if args.approved_snapshot_dir is None:
+            parser.error("remove-pending requires the snapshot approved by the user")
+        for snapshot in args.approved_snapshot_dir.glob("*.json"):
+            event = json.loads(snapshot.read_text())
+            if event.get("path") == "/v2/actions/auto-add/products/list" and event.get("status") == 200:
+                payload = event["payload"]
+                key = (payload["action_id"], payload["auto_add_date"])
+                approved.setdefault(key, set()).update(p["product_id"] for p in event["response"]["products"])
+        if not approved:
+            parser.error("Approved snapshot contains no pending-products responses")
     shops = json.loads((ROOT / "config.json").read_text())["shops"]
     matches = [s for s in shops if s["id"] == "shop03" and s["name"] == "Luo003" and s.get("enabled", True)]
     if len(matches) != 1:
@@ -119,6 +132,8 @@ def main():
                     raise RuntimeError("Repeated pending product IDs")
                 print(json.dumps({"action_id": action_id, "pending_date": date, "pending": len(ids)}), flush=True)
                 if args.operation == "remove-pending" and ids:
+                    if set(ids) != approved.get((action_id, date), set()):
+                        raise RuntimeError("Pending products differ from approved snapshot; stopped before removal")
                     for start in range(0, len(ids), 1000):
                         call("/v2/actions/auto-add/products/delete", {"action_id": action_id, "auto_add_date": date, "product_ids": ids[start:start + 1000]})
                     after = call("/v2/actions/auto-add/products/list", {"action_id": action_id, "auto_add_date": date, "limit": 100, "offset": 0})
