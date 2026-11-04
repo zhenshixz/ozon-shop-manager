@@ -1,6 +1,54 @@
 'use strict';
 const $=id=>document.getElementById(id), base='/ozon-profit/promotions/api/';
 let state=null,csrf='',selected=new Set(),dirty=false,active=false,busy=false;
+let draftHour=9,draftMinute=0;
+const padTime=n=>String(n).padStart(2,'0');
+function parseTime(value){
+ const text=value.trim();let h,m;
+ if(/^\d{1,2}:\d{1,2}$/.test(text))[h,m]=text.split(':').map(Number);
+ else if(/^\d{3,4}$/.test(text)){const digits=text.padStart(4,'0');h=Number(digits.slice(0,2));m=Number(digits.slice(2));}
+ else return null;
+ return h<24&&m<60?[h,m]:null;
+}
+function timeDisplay(){
+ $('time-value').textContent=$('time').value;
+ const changed=state&&$('time').value!==state.plan.time;
+ $('time-hint').textContent=changed?'时间已修改，请保存每日计划。':'选择时间后，保存每日计划生效。';
+ $('time-hint').classList.toggle('unsaved',Boolean(changed));
+}
+function paintTime(scroll=false){
+ for(const [id,value] of [['time-hours',draftHour],['time-minutes',draftMinute]]){
+  const column=$(id);
+  for(const option of column.children)option.setAttribute('aria-selected',String(Number(option.dataset.timeOption)===value));
+  const option=column.querySelector('[aria-selected="true"]');
+  column.setAttribute('aria-activedescendant',option.id);
+  if(scroll)column.scrollTop=option.offsetTop-(column.clientHeight-option.clientHeight)/2;
+ }
+ for(const button of document.querySelectorAll('[data-quick-time]'))button.classList.toggle('active',button.dataset.quickTime===`${padTime(draftHour)}:${padTime(draftMinute)}`);
+}
+function setDraft(h,m,scroll=true){
+ draftHour=h;draftMinute=m;$('time-draft').value=`${padTime(h)}:${padTime(m)}`;
+ $('time-error').hidden=true;$('time-apply').disabled=false;paintTime(scroll);
+}
+for(const [id,limit] of [['time-hours',24],['time-minutes',60]]){
+ const column=$(id);
+ column.innerHTML=Array.from({length:limit},(_,n)=>`<button type="button" role="option" tabindex="-1" id="${id}-${n}" data-time-option="${n}" aria-selected="false">${padTime(n)}</button>`).join('');
+ column.addEventListener('click',e=>{const option=e.target.closest('[data-time-option]');if(!option)return;const n=Number(option.dataset.timeOption);setDraft(id==='time-hours'?n:draftHour,id==='time-minutes'?n:draftMinute);column.focus({preventScroll:true});});
+ column.addEventListener('keydown',e=>{const current=id==='time-hours'?draftHour:draftMinute;let n;
+  if(e.key==='ArrowDown')n=Math.min(limit-1,current+1);else if(e.key==='ArrowUp')n=Math.max(0,current-1);else if(e.key==='Home')n=0;else if(e.key==='End')n=limit-1;else if(e.key==='PageDown')n=Math.min(limit-1,current+5);else if(e.key==='PageUp')n=Math.max(0,current-5);else if(e.key==='Enter'){e.preventDefault();$('time-apply').click();return;}else return;
+  e.preventDefault();setDraft(id==='time-hours'?n:draftHour,id==='time-minutes'?n:draftMinute);
+ });
+}
+$('time-open').addEventListener('click',()=>{
+ const [h,m]=parseTime($('time').value)||[9,0];$('time-picker').showModal();$('time-open').setAttribute('aria-expanded','true');setDraft(h,m);$('time-hours').focus({preventScroll:true});
+});
+$('time-picker').addEventListener('close',()=>{$('time-open').setAttribute('aria-expanded','false');});
+window.addEventListener('resize',()=>{if($('time-picker').open)requestAnimationFrame(()=>paintTime(true));});
+for(const button of document.querySelectorAll('[data-quick-time]'))button.addEventListener('click',()=>setDraft(...parseTime(button.dataset.quickTime)));
+$('time-draft').addEventListener('input',()=>{const parsed=parseTime($('time-draft').value);$('time-error').hidden=Boolean(parsed);$('time-apply').disabled=!parsed;if(parsed){[draftHour,draftMinute]=parsed;paintTime(true);}});
+$('time-draft').addEventListener('blur',()=>{const parsed=parseTime($('time-draft').value);if(parsed)setDraft(...parsed);});
+$('time-draft').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();if(parseTime(e.target.value))$('time-apply').click();}});
+$('time-apply').addEventListener('click',()=>{const parsed=parseTime($('time-draft').value);if(!parsed)return;$('time').value=parsed.map(padTime).join(':');dirty=true;timeDisplay();$('time-picker').close();});
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const stamp=v=>v?new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(typeof v==='number'?v*1000:v)):'尚未运行';
 const day=v=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(v*1000));
@@ -40,6 +88,7 @@ function activityNames(batches){
 }
 function selection(){const count=selected.size;$('selection-count').textContent=`已选择 ${count} 家`;$('run').disabled=!count||active||busy;$('run').textContent=active?'任务执行中':`立即执行${count?' · '+count+' 家':''}`;$('select-all').checked=count===state.shops.length&&count>0;$('select-all').indeterminate=count>0&&count<state.shops.length;}
 function render(){
+ timeDisplay();
  active=state.runs.some(r=>['queued','running'].includes(r.status));
  $('shop-count').textContent=state.shops.length;
  $('shops').innerHTML=state.shops.map(s=>{const last=latest(s.id),r=last?.item;let text='尚未运行';if(last)text=last.status==='ok'?(r?.removed?`已清理 ${r.removed} 条`:'无待加入商品'):label[last.status]||'需关注';return `<div class="shop-entry"><div class="shop-row"><input type="checkbox" data-shop="${esc(s.id)}" aria-label="选择${esc(s.name)}" ${selected.has(s.id)?'checked':''}><span class="shop-avatar">${esc(s.name.slice(-3))}</span><div class="shop-info"><strong>${esc(s.name)}</strong><div class="shop-sub">${last?`${stamp(last.run.created)} · ${last.run.source==='schedule'?'每日计划':'手动执行'}`:'尚无执行记录'}</div></div><div class="shop-result"><span class="badge ${last?.status||'neutral'}">${esc(text)}</span>${last?`<button class="shop-detail" data-run="${esc(last.run.id)}" data-sid="${esc(s.id)}">活动与商品 ↗</button>`:''}</div></div>${activityNames(r?.batches)}</div>`;}).join('');
