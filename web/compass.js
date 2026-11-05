@@ -436,7 +436,7 @@ function showProduct(p){
   <div class="cp-modal-hero">
     ${hasImg?`<button type="button" class="cp-hero-thumb" id="cp-hero-img-btn" aria-label="查看大图"><img data-cp-img src="${esc(p.image)}" alt="${esc(p.name)}" referrerpolicy="no-referrer"></button>`:'<span class="cp-no-image cp-hero-no-img">待补图</span>'}
     <div class="cp-hero-info">
-      <h3>${esc(p.name)}</h3>
+      <h3>${productTitle({name:p.name,sku:p.sku},true)}</h3>
       <p class="cp-hero-tags"><span class="cp-shop-tag">${esc(p.shop)}</span><span class="cp-sku-badge">货号 ${esc(p.offer||p.sku||'—')}</span>${p.sku&&p.offer&&p.sku!==p.offer?`<span class="cp-sku-badge">SKU ${esc(p.sku)}</span>`:''}</p>
     </div>
   </div>
