@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [商品下架、归档及原因的API只读验证（未开发）](ANALYSIS-20261105-PRODUCT-AVAILABILITY.md)
 - [罗盘商品详情标题跳转 OZON 商品页](../MAINTENANCE-20261105-COMPASS-TITLE-LINK.md)
 - [免费以图搜货本地实测：成功项、登录限制与交付边界](TEST-20261104-FREE-IMAGE-SOURCING.md)
 - [以图搜货比价调研：1688、淘宝、拼多多（未开发）](RESEARCH-20261104-IMAGE-PRICE-COMPARISON.md)
