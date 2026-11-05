@@ -264,3 +264,8 @@
 .product-title-link:hover{color:var(--blue);text-decoration:underline;text-underline-offset:3px}
 .product-title-link:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
 .product-title-arrow{color:#7183a0;font-size:.85em;white-space:nowrap}
+.product-state{display:inline-flex;vertical-align:middle;align-items:center;font-size:11px!important;font-weight:500;line-height:1.6;padding:1px 7px;border:1px solid transparent;border-radius:5px;margin:0 0 5px;white-space:nowrap}
+.product-state.removed{color:#b54736;background:#fff2f0;border-color:#ffddd5}
+.product-state.archived{color:#667085;background:#f2f4f7;border-color:#e4e7ec}
+.product-state-detail{display:block;font-size:11px;color:#7d8795;line-height:1.6;margin:0 0 7px;overflow-wrap:anywhere}
+.cp-name .product-state{margin:3px 0 0}

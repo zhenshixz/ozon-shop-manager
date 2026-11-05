@@ -381,7 +381,7 @@ function productRow(p,i){
   const valText=rank==='quantity'?`${p.quantity} 件`:rank==='profit'&&profitMode==='unit_profit'?`${cash(p.unit_profit)}/件`:cash(p.profit);
   const valClass=Number(p.profit)<0&&rank!=='quantity'?'cp-loss':rank==='profit'?'cp-profit-text':'';
   const subText=rank==='quantity'?(p.margin!=null?`利润率 ${p.margin}% ›`:'查看详情 ›'):`${p.margin==null?'利润率 —':`利润率 ${p.margin}%`} ›`;
-  return `<button type="button" class="cp-item" data-key="${esc(p.key)}">${posBadge(i)}${hasImg?`<img data-cp-img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:'<span class="cp-no-image">待补图</span>'}<span class="cp-name"><b>${esc(p.name)}</b><small class="cp-item-meta">${metaHtml}</small></span><span class="cp-value ${valClass}"><strong>${valText}</strong><small>${subText}</small></span></button>`;
+  return `<button type="button" class="cp-item" data-key="${esc(p.key)}">${posBadge(i)}${hasImg?`<img data-cp-img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:'<span class="cp-no-image">待补图</span>'}<span class="cp-name"><b>${esc(p.name)}</b>${productStateBadge(p.product_status)}<small class="cp-item-meta">${metaHtml}</small></span><span class="cp-value ${valClass}"><strong>${valText}</strong><small>${subText}</small></span></button>`;
 }
 
 function shopRow(p,i){
@@ -436,7 +436,7 @@ function showProduct(p){
   <div class="cp-modal-hero">
     ${hasImg?`<button type="button" class="cp-hero-thumb" id="cp-hero-img-btn" aria-label="查看大图"><img data-cp-img src="${esc(p.image)}" alt="${esc(p.name)}" referrerpolicy="no-referrer"></button>`:'<span class="cp-no-image cp-hero-no-img">待补图</span>'}
     <div class="cp-hero-info">
-      <h3>${productTitle({name:p.name,sku:p.sku},true)}</h3>
+      <h3>${productTitle({name:p.name,sku:p.sku},true)}</h3>${productStateBadge(p.product_status,true)}
       <p class="cp-hero-tags"><span class="cp-shop-tag">${esc(p.shop)}</span><span class="cp-sku-badge">货号 ${esc(p.offer||p.sku||'—')}</span>${p.sku&&p.offer&&p.sku!==p.offer?`<span class="cp-sku-badge">SKU ${esc(p.sku)}</span>`:''}</p>
     </div>
   </div>

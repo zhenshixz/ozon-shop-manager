@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh Ozon product availability snapshots
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ozon-monitor
+Group=ozon-monitor
+WorkingDirectory=/opt/ozon-push-monitor
+ExecStart=/usr/bin/python3.11 /opt/ozon-push-monitor/product_status.py
+UMask=0077
+Nice=10
+MemoryMax=128M
+CPUQuota=20%
+TimeoutStartSec=1800

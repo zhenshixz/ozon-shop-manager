@@ -10,6 +10,7 @@ import time
 from flask import Flask, request, session, jsonify, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 import profit_core as core
+import product_status
 
 PREFIX = '/ozon-profit'
 ROOT = Path(__file__).parent
@@ -144,6 +145,7 @@ def create_app(settings=None):
             result=[o for o in result if search in ' '.join([o['posting'],o['order_number'],o['shop_name']]+[l['name']+' '+l.get('name_zh','')+' '+l['offer_id'] for l in o['lines']]).lower()]
         state=request.args.get('state','')
         if state: result=[o for o in result if o['calculation']['status']==state]
+        product_status.annotate_orders(result)
         return jsonify(orders=result,limit=500)
 
     @app.route(PREFIX+'/api/orders/<int:order_id>',methods=['GET','POST'])
@@ -161,6 +163,7 @@ def create_app(settings=None):
                         request_id=secrets.token_hex(8),user_agent=request.user_agent.string[:160],
                         weight_mode=payload.get('weight_mode'),api_weight_g=order['calculation']['api_weight_g']),ensure_ascii=True)
                     core.save_order(db,order,source=audit)
+        product_status.annotate_orders([order])
         return jsonify(order=order)
 
     @app.get(PREFIX+'/api/analytics')
@@ -168,10 +171,15 @@ def create_app(settings=None):
         import compass_core
         with core.connection(database) as db:
             result=compass_core.build(db,request.args.get('shop',''),request.args.get('from',''),request.args.get('to',''),request.args.get('q',''),settings.get('operating_start_date','2026-10-24'),shops=available_shops(db))
+        product_status.annotate_products(result['products'])
         return jsonify(result)
 
     import promotions
     promotions.register(app)
+    @app.get(PREFIX+'/api/product-status')
+    def status_snapshots():
+        allowed={s['id'] for s in configured_shops}
+        return jsonify(statuses={json.dumps(k):v for k,v in product_status.snapshots().items() if k[0] in allowed})
     return app
 
 if __name__=='__main__':
