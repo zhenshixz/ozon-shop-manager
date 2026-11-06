@@ -147,4 +147,29 @@ class PurchaseReuseTest(unittest.TestCase):
         self.assertEqual(self.load(manual_t)['inputs']['weight_origin'],'inherited')
         self.assertIsNone(self.load(cross_t)['inputs']['weight_override'])
 
+    def test_confirming_weight_refreshes_existing_inheritance_only(self):
+        original=self.add('old-source')
+        new=self.add('new-source')
+        automatic=self.add('automatic')
+        use_api=self.add('use-api')
+        different_count=self.add('different-count',quantity=2)
+        with p.connection(self.path) as db:
+            order=p.load_order(db,original)
+            order['inputs']['weight_override']='100'
+            p.save_order(db,order,now=100)
+            order=p.load_order(db,use_api)
+            order['inputs']['weight_override']=None
+            p.save_order(db,order,now=110)
+            order=p.load_order(db,new)
+            order['inputs']['weight_override']='312'
+            p.save_order(db,order,now=120)
+            audit=db.execute('SELECT old_weight,new_weight FROM profit_weight_audit WHERE order_id=?',
+                             (automatic,)).fetchone()
+            self.assertEqual(tuple(audit),('100','312'))
+        self.assertEqual(self.load(automatic)['inputs']['weight_source_posting'],'new-source')
+        self.assertEqual(self.load(automatic)['calculation']['weight_g'],'312')
+        self.assertEqual(self.load(original)['calculation']['weight_g'],'100')
+        self.assertIsNone(self.load(use_api)['inputs']['weight_override'])
+        self.assertIsNone(self.load(different_count)['inputs']['weight_override'])
+
 if __name__=='__main__':unittest.main()

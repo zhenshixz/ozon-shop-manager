@@ -239,25 +239,39 @@ def clear_incompatible_inherited_weights(db, now, shop=None):
 
 
 def inherit_measured_weights(db, now=None, shop=None):
-    """Reuse a measured package weight for the same shop, product and quantity."""
+    """Refresh automatic weights from the latest matching measured package."""
     now = time.time() if now is None else now
     clear_incompatible_inherited_weights(db,now,shop)
-    query = '''SELECT o.id AS order_id,o.shop,l.offer_id,l.sku,l.quantity
+    query = '''SELECT o.id AS order_id,o.shop,l.offer_id,l.sku,l.quantity,
+        i.weight_override,ws.origin,ws.source_order_id
         FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
         LEFT JOIN profit_inputs i ON i.order_id=o.id
         LEFT JOIN profit_weight_sources ws ON ws.order_id=o.id
-        WHERE (i.weight_override IS NULL OR trim(i.weight_override)='')
-        AND ws.order_id IS NULL
+        WHERE (ws.origin='inherited' OR (ws.order_id IS NULL
+            AND (i.weight_override IS NULL OR trim(i.weight_override)='')))
         AND lower(o.status) NOT IN ('cancelled','canceled','returned')
+        AND NOT EXISTS (SELECT 1 FROM profit_dispatch_plans d WHERE d.order_id=o.id AND d.applied=0)
         AND (SELECT COUNT(*) FROM profit_lines l2 WHERE l2.order_id=o.id)=1'''
     args = []
     if shop is not None:
         query += ' AND o.shop=?'; args.append(shop)
     filled = []
+    references = {}
     for row in db.execute(query, args).fetchall():
-        prior = latest_measured_weight(db,row['shop'],row['quantity'],row['offer_id'],row['sku'],row['order_id'])
+        key = (row['shop'],row['quantity'],row['offer_id'],row['sku'])
+        if key not in references:
+            references[key] = latest_measured_weight(db,*key)
+        prior = references[key]
         if prior is None: continue
         value = prior['weight_override']
+        old = row['weight_override']
+        if row['source_order_id']==prior['order_id'] and old and D(old)==D(value):
+            continue
+        if row['origin']=='inherited':
+            audit=json.dumps(dict(channel='weight-reuse-refresh',old_source_order_id=row['source_order_id'],
+                                  source_order_id=prior['order_id']))
+            db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,?,?,?)',
+                       (row['order_id'],old,value,now,audit))
         db.execute('''INSERT INTO profit_inputs(order_id,weight_override,template,rate,forwarder,other_cost,updated)
             VALUES (?,?,'auto',NULL,'2','0',?)
             ON CONFLICT(order_id) DO UPDATE SET weight_override=excluded.weight_override''',
