@@ -233,6 +233,18 @@ class ProfitTest(unittest.TestCase):
         self.assertEqual(result['parcel_comparison']['packages']['two']['tier'],'低客单轻小件')
         self.assertEqual(result['parcel_comparison']['best'],2)
         self.assertEqual(client.get(path).json['order']['parcel_comparison'],comparison)
+        with p.connection(self.path) as db:
+            single=p.load_order(db,1)
+            single['inputs']['weight_override']='312'
+            p.save_order(db,single)
+        estimate=client.get(path).json['order']['parcel_comparison']['packages']['one']
+        self.assertEqual(estimate['default_weight'],'312')
+        self.assertEqual(estimate['reference_posting'],'TEST-1')
+        body={'lines':[{'id':order['lines'][0]['id'],'purchase_unit':'9.12'}],
+              'inputs':{},'dispatch_choice':2,'parcel_weights':{}}
+        saved=client.post(path,json=body,headers={'X-CSRF-Token':token}).json['order']
+        self.assertEqual(saved['dispatch_plan']['weights'],{'one':'312'})
+        self.assertEqual([pack['weight'] for pack in saved['dispatch_plan']['packages']],['312']*3)
 
     def test_confirmed_dispatch_updates_compass_and_hands_off_to_actual_postings(self):
         self.post.update(posting_number='DISPATCH-1',order_number='DISPATCH')
@@ -250,6 +262,10 @@ class ProfitTest(unittest.TestCase):
         self.assertEqual(order['calculation']['weight_g'],'412.000')
         body={'lines':[{'id':l['id'],'purchase_unit':'9.12','price_override':''} for l in order['lines']],
               'inputs':{},'dispatch_choice':1,'parcel_weights':{'one':'312','two':'312'}}
+        pending=client.post(path+'/preview',json=dict(body,parcel_weights={}),headers=headers).json['order']
+        self.assertTrue(pending['calculation']['dispatch_pending'])
+        self.assertIsNone(pending['calculation']['profit'])
+        self.assertIsNone(pending['calculation']['shipping'])
         self.assertEqual(client.post(path,json=dict(body,parcel_weights={}),headers=headers).status_code,400)
         preview=client.post(path+'/preview',json=body,headers=headers).json['order']
         self.assertEqual(preview['calculation']['profit'],'-0.45')

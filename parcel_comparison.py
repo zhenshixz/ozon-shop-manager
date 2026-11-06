@@ -55,7 +55,7 @@ def compare(db, order, trial_weights=None):
     packages = {}
     exact = {}
 
-    def add_package(key, label, items, default_weight, source, template='auto'):
+    def add_package(key, label, items, default_weight, source, template='auto', reference_posting=None):
         weight = default_weight
         error = None
         if key != 'all' and weights.get(key) not in (None, ''):
@@ -77,7 +77,8 @@ def compare(db, order, trial_weights=None):
         packages[key] = dict(label=label, weight=None if weight is None else str(weight),
                              default_weight=None if default_weight is None else str(default_weight),
                              source=source, error=error, revenue=None if error else quote['revenue'],
-                             tier=None if error else quote['template']['name'],shape=composition(items))
+                             tier=None if error else quote['template']['name'],shape=composition(items),
+                             reference_posting=reference_posting)
 
     if base['weight_source'] == 'custom':
         source = '本单计费重量'
@@ -88,11 +89,15 @@ def compare(db, order, trial_weights=None):
     add_package('all', '合发整包', lines, base['weight_g'], source, inputs.get('template', 'auto'))
 
     def add_split_package(key, label, line, quantity):
-        if line.get('weight_g') not in (None, ''):
+        ref = core.latest_measured_weight(db,order['shop'],quantity,line['offer_id'],line['sku'],order['id'])
+        if ref:
+            weight, source = ref['weight_override'], '同件数历史实称'
+        elif line.get('weight_g') not in (None, ''):
             weight, source = core.D(line['weight_g']) * quantity, 'API 估重'
         else:
             weight, source = None, '待补重量'
-        add_package(key, label, [dict(line, quantity=quantity)], weight, source)
+        add_package(key, label, [dict(line, quantity=quantity)], weight, source,
+                    reference_posting=ref['posting'] if ref else None)
 
     plans = []
 
@@ -105,7 +110,8 @@ def compare(db, order, trial_weights=None):
                 repeated = f'{key}-{index}'
                 package = packages[key]
                 items = [dict(by_key[line_key],quantity=qty) for line_key,qty in package['shape']]
-                add_package(repeated,f'第 {index} 包',items,package['weight'],'同首包重量')
+                source = 'API 估重' if package['source']=='API 估重' else '同首包重量'
+                add_package(repeated,f'第 {index} 包',items,package['weight'],source)
                 parcels.append(repeated)
         cost = None
         if all(key in exact for key in parcels):
@@ -145,7 +151,10 @@ def select(db, order, choice, weights, preview):
         raise ValueError('发货单明细已更新，请重新打开核算')
     plan = comparison['plans'][choice]
     supplied = weights if isinstance(weights,dict) else {}
-    if not preview and any(supplied.get(part['key']) in (None,'') for part in plan['parts'] if '-' not in part['key']):
+    if any(supplied.get(key) in (None,'') and not comparison['packages'][key]['reference_posting']
+           for key in (part['key'] for part in plan['parts']) if '-' not in key):
+        if preview:
+            return None
         raise ValueError('请填写所选拆发方案的实际包裹重量')
     if plan['cost'] is None:
         if preview:
@@ -156,7 +165,7 @@ def select(db, order, choice, weights, preview):
     for part in plan['parts']:
         key = part['key']
         package = comparison['packages'][key]
-        if supplied.get(key) not in (None,''):
+        if '-' not in key or supplied.get(key) not in (None,''):
             actual[key] = package['weight']
         packages.extend([dict(shape=package['shape'],weight=package['weight']) for _ in range(part['count'])])
     return dict(choice=choice,weights=actual,packages=packages)

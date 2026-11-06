@@ -171,6 +171,10 @@ def create_app(settings=None):
                 if 'dispatch_choice' in payload:
                     order['dispatch_plan']=parcel_comparison.select(db,order,payload['dispatch_choice'],trial_weights,preview)
                     order['calculation']=core.calculate(order)
+                    if preview and payload['dispatch_choice']>0 and order['dispatch_plan'] is None:
+                        order['calculation'].update(dispatch_pending=True,status='incomplete',profit=None,
+                            profit_exact=None,sales_margin=None,cost_margin=None,shipping=None,
+                            shipping_exact=None,forwarder=None)
                 if not preview:
                     audit_base=dict(channel='web-save',session=session.setdefault('audit_id',secrets.token_hex(8)),
                         request_id=secrets.token_hex(8),user_agent=request.user_agent.string[:160],

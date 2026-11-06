@@ -353,7 +353,13 @@ function updateWeightReuseUI(){
 }
 function payload(){
   const body={lines:current.lines.map(l=>({id:l.id,purchase_unit:$('cost-'+l.id).value,price_override:$('price-'+l.id).value})),inputs:{weight_override:weightMode==='custom'?$('weight').value:null,template:$('template').value,rate:$('rate').value,forwarder:$('forwarder').value,other_cost:$('other').value},weight_mode:weightMode,weight_confirmed:confirmedWeight!==''&&confirmedWeight===$('weight').value,expected_api_weight_g:current.calculation.api_weight_g,expected_weight_override:current.inputs.weight_override??null};
-  if(current.parcel_comparison)Object.assign(body,{dispatch_choice:dispatchChoice,parcel_weights:parcelWeights});
+  if(current.parcel_comparison){
+    const weights={};
+    for(const input of $('parcel-weights').querySelectorAll('[data-parcel-weight]')){
+      if(input.value.trim())weights[input.dataset.parcelWeight]=input.value.trim();
+    }
+    Object.assign(body,{dispatch_choice:dispatchChoice,parcel_weights:weights});
+  }
   return body;
 }
 function updateWeightConfirmation(){
@@ -400,6 +406,14 @@ function showCalculation(c){
     :apiWeight!=null?`当前按 API 商品重量合计 ${apiWeight} 克预估。如需使用实包称重，请勾选下方“按实际称重修改”。`:'API 未提供完整重量，请勾选“按实际称重修改”并填写实际计费重量。';
   if(weightMode==='api')$('weight').value=c.api_weight_g==null?'':String(Number(c.api_weight_g));
   updateWeightConfirmation();
+  if(c.dispatch_pending){
+    $('profit-title').textContent='整单预估利润';
+    $('profit').textContent='—';$('profit').classList.remove('negative');
+    $('margin').textContent='待核实拆发数据';
+    $('breakdown').innerHTML='';
+    $('calc-note').textContent='请核实拆后每包的实际重量和售价，再计算拆发利润。';
+    return;
+  }
   $('profit').textContent=money(c.profit);$('profit').classList.toggle('negative',Number(c.profit)<0);
   $('margin').textContent=c.sales_margin==null?'待补齐资料':`销售利润率 ${c.sales_margin}%`;
   if(!$('rate').value)$('rate').placeholder=`当前档位默认 ${c.rate}%`;
@@ -420,7 +434,7 @@ function updateLineSubtotals(){
     $('price-subtotal-'+line.id).textContent='售价合计 · '+subtotal(price);
   }
 }
-function showParcelComparison(data,reset=false){
+function showParcelComparison(data,reset=false,pending=false){
   const panel=$('parcel-comparison');
   panel.hidden=!data;
   if(reset){
@@ -437,21 +451,21 @@ function showParcelComparison(data,reset=false){
   }
   if(dispatchChoice>0 && plans[dispatchChoice]){
     const count=plans[dispatchChoice].parts.reduce((n,part)=>n+part.count,0);
-    summary=`已选拆发 ${count} 包`;
+    summary=pending?'拆发待核实重量':`已选拆发 ${count} 包`;
   }
   $('parcel-summary').textContent=summary;
   const restoreFocus=document.activeElement?.name==='dispatch-choice';
   $('parcel-plans').innerHTML=plans.map((plan,index)=>{
     const breakdown=plan.parts.map(({key,count})=>{
       const p=packages[key];
-      return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克 · ${esc(p.tier)}`;
+      return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克${p.source==='API 估重'?'（估）':''} · ${esc(p.tier)}`;
     }).join('<br>');
     return `<label class="parcel-plan${index===dispatchChoice?' is-selected':''}"><input type="radio" name="dispatch-choice" value="${index}" ${index===dispatchChoice?'checked':''}><span class="parcel-plan-body"><b>${esc(plan.label)}</b><small>${breakdown}</small></span><strong>${money(plan.cost)}</strong></label>`;
   }).join('');
   if(restoreFocus)$('parcel-plans').querySelector(':checked')?.focus();
   const fields=$('parcel-weights');
   if(!fields.childElementCount){
-    fields.innerHTML=Object.entries(packages).filter(([key])=>key!=='all').map(([key,p])=>`<label>${esc(p.label)}<input type="text" inputmode="decimal" maxlength="18" data-parcel-weight="${esc(key)}" autocomplete="off" value="${esc(parcelWeights[key]??'')}"><small data-parcel-source="${esc(key)}"></small></label>`).join('');
+    fields.innerHTML=Object.entries(packages).filter(([key])=>key!=='all').map(([key,p])=>`<label>${esc(p.label)}<input type="text" inputmode="decimal" maxlength="18" data-parcel-weight="${esc(key)}" autocomplete="off" value="${esc(parcelWeights[key]??(p.reference_posting?p.default_weight:''))}"><small data-parcel-source="${esc(key)}"></small></label>`).join('');
   }
   const selectedKeys=plans[dispatchChoice]?.parts.map(part=>part.key)||[];
   $('parcel-weight-area').hidden=dispatchChoice===0;
@@ -459,9 +473,11 @@ function showParcelComparison(data,reset=false){
     const key=input.dataset.parcelWeight,p=packages[key];
     input.closest('label').hidden=!selectedKeys.includes(key);
     input.placeholder=p.default_weight==null?'填写克数':String(Number(p.default_weight));
-    fields.querySelector(`[data-parcel-source="${key}"]`).textContent=parcelWeights[key]?'手动核实':key.includes('-')?'留空沿用首包':'API 估重参考';
+    const source=fields.querySelector(`[data-parcel-source="${key}"]`);
+    source.textContent=parcelWeights[key]?'本单录入':key.includes('-')?'留空沿用首包':p.reference_posting?'同件数历史实称':'API 估重参考';
+    source.title=p.reference_posting?`来源 ${p.reference_posting}`:'';
   }
-  $('parcel-note').textContent=`货代费 ${money(forwarder)}/包。按实际发货方式选择并保存后计入利润。平台扣费沿用本单费率。`;
+  $('parcel-note').textContent=`货代费 ${money(forwarder)}/包。历史实称自动带入，可修改。只有 API 估重时，请填写实称后再核算。`;
 }
 function queuePreview(){
   previewSerial++;
@@ -481,7 +497,7 @@ async function preview(){
     const result=await api('/orders/'+id+'/preview',payload());
     if(serial===previewSerial&&revision===editRevision&&current.id===id){
       showCalculation(result.order.calculation);
-      showParcelComparison(result.order.parcel_comparison);
+      showParcelComparison(result.order.parcel_comparison,false,result.order.calculation.dispatch_pending);
     }
   }catch(error){
     if(serial===previewSerial){
