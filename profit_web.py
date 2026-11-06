@@ -24,6 +24,12 @@ def create_app(settings=None):
         PERMANENT_SESSION_LIFETIME=dt.timedelta(days=30), MAX_CONTENT_LENGTH=32768)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0)
     database = settings.get('database',str(ROOT/'data'/'monitor.sqlite3'))
+    try:
+        with core.connection(database) as db:
+            core.ensure_schema(db)
+            core.inherit_measured_weights(db)
+    except Exception:
+        pass
     failures = collections.deque(maxlen=100)
     configured_shops=settings.get('shops')
     if configured_shops is None:
@@ -151,6 +157,7 @@ def create_app(settings=None):
     @app.route(PREFIX+'/api/orders/<int:order_id>',methods=['GET','POST'])
     @app.post(PREFIX+'/api/orders/<int:order_id>/preview')
     def detail(order_id):
+        synced=None
         with core.connection(database) as db:
             order=core.load_order(db,order_id)
             if not order: return jsonify(error='订单不存在'),404
@@ -159,12 +166,17 @@ def create_app(settings=None):
                 preview=request.path.endswith('/preview')
                 order=core.apply_inputs(order,payload,require_confirmation=not preview)
                 if not preview:
-                    audit=json.dumps(dict(channel='web-save',session=session.setdefault('audit_id',secrets.token_hex(8)),
+                    audit_base=dict(channel='web-save',session=session.setdefault('audit_id',secrets.token_hex(8)),
                         request_id=secrets.token_hex(8),user_agent=request.user_agent.string[:160],
-                        weight_mode=payload.get('weight_mode'),api_weight_g=order['calculation']['api_weight_g']),ensure_ascii=True)
+                        weight_mode=payload.get('weight_mode'),api_weight_g=order['calculation']['api_weight_g'])
+                    audit=json.dumps(audit_base,ensure_ascii=True)
                     core.save_order(db,order,source=audit)
+                    if isinstance(payload.get('batch_sync'),dict):
+                        batch_audit=json.dumps({**audit_base,'channel':'web-batch-sync','source_order_id':order_id},ensure_ascii=True)
+                        synced=core.batch_sync_from_order(db,order,payload['batch_sync'],source=batch_audit)
+            core.enrich_order_sync_info(db,order)
         product_status.annotate_orders([order])
-        return jsonify(order=order)
+        return jsonify(order=order,synced=synced)
 
     @app.get(PREFIX+'/api/analytics')
     def analytics():

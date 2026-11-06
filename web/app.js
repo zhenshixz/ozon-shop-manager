@@ -305,14 +305,49 @@ function renderOrders(){
   }
 }
 function purchaseReuseBadge(order){
+  const badges=[];
   const reused=order.lines.filter(line=>line.purchase_origin==='inherited');
-  if(!reused.length)return '';
-  const sources=[...new Set(reused.map(line=>line.purchase_source_posting).filter(Boolean))];
-  return `<span class="purchase-reuse-badge" title="${esc(sources.length?'来源订单：'+sources.join('、'):'沿用最近一次人工填写的同商品采购单价')}" aria-label="采购价沿用，可在详情修改">采购价沿用</span>`;
+  if(reused.length){
+    const sources=[...new Set(reused.map(line=>line.purchase_source_posting).filter(Boolean))];
+    badges.push(`<span class="purchase-reuse-badge" title="${esc(sources.length?'来源订单：'+sources.join('、'):'沿用最近一次人工填写的同商品采购单价')}" aria-label="采购价沿用，可在详情修改">采购价沿用</span>`);
+  }
+  if(order.inputs?.weight_origin==='inherited'&&order.inputs?.weight_override!=null){
+    const src=order.inputs?.weight_source_posting||order.weight_source_posting||'';
+    badges.push(`<span class="purchase-reuse-badge" title="${esc(src?'来源订单：'+src:'沿用最近一次核对的同商品实测重量')}" aria-label="实测重量沿用，可在详情取消勾选">实测重量沿用</span>`);
+  }
+  return badges.join('');
 }
 function purchaseCostHint(line){
   if(line.purchase_origin==='inherited')return `<small id="reuse-note-${line.id}" class="purchase-reuse-note" title="${esc(line.purchase_source_posting?'来源订单：'+line.purchase_source_posting:'历史采购记录')}">采购价沿用${line.purchase_source_posting?' · 来源 '+esc(line.purchase_source_posting):''}，可修改</small>`;
-  return line.previous_cost!=null?`<button type="button" class="suggestion" data-cost="${line.id}" data-value="${esc(line.previous_cost)}">参考上次 ${money(line.previous_cost)}，点击填入</button>`:'<small>出单后实际购买的单件成本</small>';
+  if(line.previous_cost!=null){
+    const src=[line.previous_cost_shop&&line.previous_cost_shop!==current?.shop_name?line.previous_cost_shop:'',line.previous_cost_posting||''].filter(Boolean).join(' · ');
+    return `<button type="button" class="suggestion" data-cost="${line.id}" data-value="${esc(line.previous_cost)}" title="${esc(src?'来源：'+src:'历史同商品采购价')}">参考上次 ${money(line.previous_cost)}${line.previous_cost_shop&&line.previous_cost_shop!==current?.shop_name?' ('+esc(line.previous_cost_shop)+')':''}，点击填入</button>`;
+  }
+  return '<small>出单后实际购买的单件成本</small>';
+}
+function updateWeightReuseUI(){
+  const note=$('weight-reuse-note'),btn=$('weight-suggestion');
+  if(!current)return;
+  const p=current.inputs||{},pw=current.previous_weight;
+  const isInherited=weightMode==='custom'&&p.weight_origin==='inherited'&&
+    p.weight_override!=null&&Number($('weight').value)===Number(p.weight_override);
+  if(note){
+    if(isInherited){
+      const src=p.weight_source_posting||pw?.posting||'';
+      note.hidden=false;
+      note.textContent=`实测重量沿用${src?' · 来源 '+src:''}，取消勾选可恢复 API 重量`;
+    }else{
+      note.hidden=true;
+    }
+  }
+  if(btn){
+    if(!isInherited&&pw&&pw.weight_g!=null&&(weightMode==='api'||Number($('weight').value)!==Number(pw.weight_g))){
+      btn.hidden=false;
+      btn.textContent=`参考上次实测 ${pw.weight_g} 克，点击填入`;
+    }else{
+      btn.hidden=true;
+    }
+  }
 }
 function payload(){
   return {lines:current.lines.map(l=>({id:l.id,purchase_unit:$('cost-'+l.id).value,price_override:$('price-'+l.id).value})),inputs:{weight_override:weightMode==='custom'?$('weight').value:null,template:$('template').value,rate:$('rate').value,forwarder:$('forwarder').value,other_cost:$('other').value},weight_mode:weightMode,weight_confirmed:confirmedWeight!==''&&confirmedWeight===$('weight').value,expected_api_weight_g:current.calculation.api_weight_g,expected_weight_override:current.inputs.weight_override??null};
@@ -325,6 +360,7 @@ function updateWeightConfirmation(){
   $('weight-confirm-row').hidden=!changed;$('weight-confirm').required=changed;
   const api=current.calculation.api_weight_g;
   $('weight-confirm-text').textContent=`我已核实，采用 ${value||'所填'} 克自定义计费重量${api==null?'':`（API ${Number(api)} 克）`}`;
+  updateWeightReuseUI();
 }
 async function openOrder(id){
   if(loading)return;loading=true;
@@ -333,15 +369,19 @@ async function openOrder(id){
     $('detail-shop').textContent=current.shop_name+' · '+current.posting+' · '+orderStatus(current);
     $('order-status').textContent='平台最新阶段：'+orderStatus(current)+'。'+statusHint(current)+(current.provider_status?'；物流商原文：'+current.provider_status:'');
     $('detail-title').textContent='采购成本与利润';
-    $('product-fields').innerHTML=current.lines.map(l=>`<section class="product-block">${productInfo(l,true)}<div class="field-grid"><label class="cost-label">实际采购单价 · 元<input id="cost-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="请填写每件采购价" value="${esc(l.purchase_unit??'')}">${purchaseCostHint(l)}</label><label>核算售价 · 元 / 件<input id="price-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="${esc(l.currency==='CNY'?l.unit_price:'请填写人民币售价')}" value="${esc(l.price_override??'')}"><small>订单成交价 ${esc(l.currency)} ${esc(l.unit_price??'待同步')}；留空则沿用</small></label></div></section>`).join('');
+    $('product-fields').innerHTML=current.lines.map(l=>`<section class="product-block">${productInfo(l,true)}<div class="field-grid"><label class="cost-label">实际采购单价 · 元 / 件<input id="cost-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="请填写每件采购价" value="${esc(l.purchase_unit??'')}">${purchaseCostHint(l)}${l.quantity>1?`<small id="cost-subtotal-${l.id}"></small>`:''}</label><label>核算售价 · 元 / 件<input id="price-${l.id}" type="number" min="0" step="any" inputmode="decimal" placeholder="${esc(l.currency==='CNY'?l.unit_price:'请填写人民币售价')}" value="${esc(l.price_override??'')}"><small>订单成交价 ${esc(l.currency)} ${esc(l.unit_price??'待同步')}；留空则沿用</small>${l.quantity>1?`<small id="price-subtotal-${l.id}"></small>`:''}</label></div></section>`).join('');
     bindThumbnails($('product-fields'));
     const p=current.inputs,c=current.calculation;
     weightMode=p.weight_override==null?'api':'custom';confirmedWeight='';
-    $('weight').readOnly=weightMode==='api';$('weight').value=p.weight_override??(c.api_weight_g==null?'':String(Number(c.api_weight_g)));
-    $('weight').placeholder='请填写实际计费重量';$('weight-confirm').checked=false;
+    $('weight').readOnly=weightMode==='api';
+    $('weight').value=p.weight_override??(c.api_weight_g==null?'':String(Number(c.api_weight_g)));
+    $('weight-confirm').checked=false;
+    $('weight').placeholder='请填写实际计费重量';
     updateWeightConfirmation();
     $('forwarder').value=p.forwarder??'2';$('other').value=p.other_cost??'0';$('rate').value=p.rate??'';$('template').value=p.template||'auto';
-    $('save-status').textContent='修改后请保存';$('save').disabled=false;showCalculation(c);
+    $('save-status').textContent='修改后请保存';$('save').disabled=false;$('save').textContent='保存核算';
+    showCalculation(c);
+    updateLineSubtotals();
     for(const button of $('product-fields').querySelectorAll('[data-cost]'))button.addEventListener('click',()=>{$('cost-'+button.dataset.cost).value=button.dataset.value;changed();});
     $('detail').showModal();
   }catch(error){notice(error.message);}finally{loading=false;}
@@ -350,7 +390,7 @@ function showCalculation(c){
   const apiWeight=c.api_weight_g==null?null:Number(c.api_weight_g);
   $('api-weight').textContent=c.weight_source==='custom'
     ?`当前使用自定义计费重量 ${Number(c.custom_weight_g)} 克${apiWeight==null?'':`，覆盖 API 商品重量 ${apiWeight} 克`}。取消勾选“按实际称重修改”可恢复 API 重量。`
-    :apiWeight!=null?`当前采用 API 商品重量 ${apiWeight} 克。如需使用实包称重，请勾选下方“按实际称重修改”。`:'API 未提供完整重量，请勾选“按实际称重修改”并填写实际计费重量。';
+    :apiWeight!=null?`当前按 API 商品重量合计 ${apiWeight} 克预估。如需使用实包称重，请勾选下方“按实际称重修改”。`:'API 未提供完整重量，请勾选“按实际称重修改”并填写实际计费重量。';
   if(weightMode==='api')$('weight').value=c.api_weight_g==null?'':String(Number(c.api_weight_g));
   updateWeightConfirmation();
   $('profit').textContent=money(c.profit);$('profit').classList.toggle('negative',Number(c.profit)<0);
@@ -361,8 +401,20 @@ function showCalculation(c){
   $('breakdown').innerHTML=values.map(([label,value])=>`<div class="break-row"><span>${esc(label)}</span><b>${money(value)}</b></div>`).join('');
   $('calc-note').textContent=[...c.issues,...c.warnings,c.profit_exact!=null?`未取整利润 ${c.profit_exact} 元；运费未取整 ${c.shipping_exact} 元。`:''].filter(Boolean).join('；');
 }
+function updateLineSubtotals(){
+  for(const line of current.lines){
+    if(line.quantity<=1)continue;
+    const cost=$('cost-'+line.id).value;
+    const price=$('price-'+line.id).value||(line.currency==='CNY'?line.unit_price:null);
+    const subtotal=value=>value==null||value===''?'待填单价':
+      `${money(value)}/件 × ${line.quantity} = ${money(Number(value)*line.quantity)}`;
+    $('cost-subtotal-'+line.id).textContent='采购合计 · '+subtotal(cost);
+    $('price-subtotal-'+line.id).textContent='售价合计 · '+subtotal(price);
+  }
+}
 function changed(){
   updateWeightConfirmation();
+  updateLineSubtotals();
   editRevision++;$('save-status').textContent='有修改，尚未保存';
   $('profit').textContent='计算中…';$('margin').textContent='';
   clearTimeout(timer);timer=setTimeout(preview,300);
@@ -375,17 +427,38 @@ async function preview(){
 $('weight-custom').addEventListener('input',event=>{
   weightMode=event.target.checked?'custom':'api';confirmedWeight='';$('weight-confirm').checked=false;
   $('weight').readOnly=weightMode==='api';
-  $('weight').value=weightMode==='api'?(current.calculation.api_weight_g==null?'':String(Number(current.calculation.api_weight_g))):(current.inputs.weight_override??current.calculation.api_weight_g??'');
+  const fallbackCustom=current.inputs.weight_override??current.calculation.api_weight_g??'';
+  $('weight').value=weightMode==='api'?(current.calculation.api_weight_g==null?'':String(Number(current.calculation.api_weight_g))):String(fallbackCustom);
   changed();if(weightMode==='custom')$('weight').focus();
 });
+$('weight-suggestion')?.addEventListener('click',()=>{
+  const pw=current?.previous_weight;
+  if(!pw||pw.weight_g==null)return;
+  weightMode='custom';
+  $('weight-custom').checked=true;
+  $('weight').readOnly=false;
+  $('weight').value=String(pw.weight_g);
+  $('weight-confirm').checked=false;
+  confirmedWeight='';
+  changed();
+});
 $('weight-confirm').addEventListener('input',event=>{confirmedWeight=event.target.checked?$('weight').value:'';changed();});
-$('edit-form').addEventListener('input',event=>{if(event.target.id==='weight'){confirmedWeight='';$('weight-confirm').checked=false;}if(event.target.matches('input,select'))changed();});
-$('edit-form').addEventListener('change',event=>{if(event.target.tagName==='SELECT')changed();});
+$('edit-form').addEventListener('input',event=>{
+  if(event.target.id==='weight'){confirmedWeight='';$('weight-confirm').checked=false;}
+  if(event.target.matches('input,select'))changed();
+});
+$('edit-form').addEventListener('change',event=>{
+  if(event.target.tagName==='SELECT')changed();
+});
 $('edit-form').addEventListener('submit',async event=>{
   event.preventDefault();clearTimeout(timer);previewSerial++;const revision=editRevision;
   $('save').disabled=true;$('save-status').textContent='正在保存…';
   try{const result=await api('/orders/'+current.id,payload());
-    if(revision===editRevision){current=result.order;showCalculation(current.calculation);for(const line of current.lines){const note=$('reuse-note-'+line.id);if(note&&line.purchase_origin!=='inherited')note.textContent='已保存本单采购价';}$('save-status').textContent='已保存，下次打开仍会保留';}else $('save-status').textContent='已保存先前内容；新修改请再次保存';
+    if(revision===editRevision){
+      current=result.order;showCalculation(current.calculation);
+      for(const line of current.lines){const note=$('reuse-note-'+line.id);if(note&&line.purchase_origin!=='inherited')note.textContent='已保存本单采购价';}
+      $('save-status').textContent='已保存，下次打开仍会保留';
+    }else $('save-status').textContent='已保存先前内容；新修改请再次保存';
     await loadOrders();
   }catch(error){$('save-status').textContent=error.message;}finally{$('save').disabled=false;}
 });

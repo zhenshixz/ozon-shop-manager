@@ -103,6 +103,9 @@ def ensure_schema(db):
         CREATE TABLE IF NOT EXISTS profit_purchase_sources (
             line_id INTEGER PRIMARY KEY,origin TEXT NOT NULL,source_line_id INTEGER,
             recorded_at REAL NOT NULL,source_purchase_unit TEXT);
+        CREATE TABLE IF NOT EXISTS profit_weight_sources (
+            order_id INTEGER PRIMARY KEY,origin TEXT NOT NULL,source_order_id INTEGER,
+            recorded_at REAL NOT NULL,source_weight_g TEXT);
     ''')
     if 'provider' not in {r[1] for r in db.execute('PRAGMA table_info(profit_translation_requests)')}:
         db.execute("ALTER TABLE profit_translation_requests ADD COLUMN provider TEXT NOT NULL DEFAULT 'MyMemory'")
@@ -112,6 +115,10 @@ def ensure_schema(db):
         SELECT l.id,'manual',NULL,COALESCE(i.updated,o.created),NULL
         FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
         LEFT JOIN profit_inputs i ON i.order_id=o.id WHERE l.purchase_unit IS NOT NULL''')
+    db.execute('''INSERT OR IGNORE INTO profit_weight_sources
+        SELECT i.order_id,'manual',NULL,COALESCE(i.updated,o.created),NULL
+        FROM profit_inputs i JOIN profit_orders o ON o.id=i.order_id
+        WHERE i.weight_override IS NOT NULL AND trim(i.weight_override)!='' ''')
 
 @contextlib.contextmanager
 def connection(path):
@@ -184,6 +191,80 @@ def inherit_purchase_prices(db, now=None, shop=None):
     return filled
 
 
+def latest_measured_weight(db, shop, quantity, offer_id='', sku='', exclude_order_id=-1):
+    field, value = ('offer_id', offer_id) if offer_id else ('sku', sku)
+    if not value: return None
+    return db.execute('''SELECT o.id AS order_id,o.posting,i.weight_override
+        FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+        JOIN profit_inputs i ON i.order_id=o.id
+        LEFT JOIN profit_weight_sources ws ON ws.order_id=o.id
+        WHERE o.shop=? AND l.'''+field+'''=? AND o.id<>? AND l.quantity=?
+        AND CAST(i.weight_override AS REAL)>0 AND CAST(i.weight_override AS REAL)<=25000
+        AND COALESCE(ws.origin,'manual')='manual'
+        AND lower(o.status) NOT IN ('cancelled','canceled','returned')
+        AND (SELECT COUNT(*) FROM profit_lines l2 WHERE l2.order_id=o.id)=1
+        ORDER BY COALESCE(ws.recorded_at,i.updated,o.created) DESC,o.created DESC,o.id DESC LIMIT 1''',
+        (shop, value, exclude_order_id, quantity)).fetchone()
+
+
+def clear_incompatible_inherited_weights(db, now, shop=None):
+    """Discard derived weights if the original package no longer matches."""
+    query = '''SELECT w.order_id,w.source_order_id,i.weight_override
+        FROM profit_weight_sources w
+        JOIN profit_inputs i ON i.order_id=w.order_id
+        JOIN profit_orders o ON o.id=w.order_id
+        WHERE w.origin='inherited' AND NOT EXISTS (
+            SELECT 1 FROM profit_orders src
+            JOIN profit_lines sl ON sl.order_id=src.id
+            JOIN profit_lines l ON l.order_id=o.id
+            WHERE src.id=w.source_order_id AND src.shop=o.shop
+            AND l.quantity=sl.quantity
+            AND ((l.offer_id!='' AND l.offer_id=sl.offer_id)
+                 OR (l.offer_id='' AND l.sku!='' AND l.sku=sl.sku))
+            AND (SELECT COUNT(*) FROM profit_lines WHERE order_id=o.id)=1
+            AND (SELECT COUNT(*) FROM profit_lines WHERE order_id=src.id)=1
+        )'''
+    args = () if shop is None else (shop,)
+    if shop is not None:
+        query += ' AND o.shop=?'
+    for row in db.execute(query,args).fetchall():
+        audit = json.dumps(dict(channel='weight-reuse-package-mismatch', source_order_id=row['source_order_id']))
+        db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,NULL,?,?)',
+                   (row['order_id'],row['weight_override'],now,audit))
+        db.execute('UPDATE profit_inputs SET weight_override=NULL WHERE order_id=?',(row['order_id'],))
+        db.execute('DELETE FROM profit_weight_sources WHERE order_id=?',(row['order_id'],))
+
+
+def inherit_measured_weights(db, now=None, shop=None):
+    """Reuse a measured package weight for the same shop, product and quantity."""
+    now = time.time() if now is None else now
+    clear_incompatible_inherited_weights(db,now,shop)
+    query = '''SELECT o.id AS order_id,o.shop,l.offer_id,l.sku,l.quantity
+        FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+        LEFT JOIN profit_inputs i ON i.order_id=o.id
+        LEFT JOIN profit_weight_sources ws ON ws.order_id=o.id
+        WHERE (i.weight_override IS NULL OR trim(i.weight_override)='')
+        AND ws.order_id IS NULL
+        AND lower(o.status) NOT IN ('cancelled','canceled','returned')
+        AND (SELECT COUNT(*) FROM profit_lines l2 WHERE l2.order_id=o.id)=1'''
+    args = []
+    if shop is not None:
+        query += ' AND o.shop=?'; args.append(shop)
+    filled = []
+    for row in db.execute(query, args).fetchall():
+        prior = latest_measured_weight(db,row['shop'],row['quantity'],row['offer_id'],row['sku'],row['order_id'])
+        if prior is None: continue
+        value = prior['weight_override']
+        db.execute('''INSERT INTO profit_inputs(order_id,weight_override,template,rate,forwarder,other_cost,updated)
+            VALUES (?,?,'auto',NULL,'2','0',?)
+            ON CONFLICT(order_id) DO UPDATE SET weight_override=excluded.weight_override''',
+            (row['order_id'], value, now))
+        db.execute("INSERT OR REPLACE INTO profit_weight_sources VALUES (?,'inherited',?,?,?)",
+            (row['order_id'], prior['order_id'], now, value))
+        filled.append(dict(order_id=row['order_id'], source_order_id=prior['order_id'], weight_override=value))
+    return filled
+
+
 def capture_postings(db, shop, source, postings, now):
     """Capture all postings, independent of the once-per-order notification dedup."""
     for posting in postings:
@@ -233,6 +314,7 @@ def capture_postings(db, shop, source, postings, now):
                 (order_id,key,sku,offer,str(item.get('name') or key),quantity,price,str(currency),
                  str(weight) if weight is not None else None,picture,now))
     inherit_purchase_prices(db,now,shop['id'])
+    inherit_measured_weights(db,now,shop['id'])
 
 def recommend_template(revenue, weight):
     # User-confirmed worksheet rules (2026-11-01), using CNY package revenue
@@ -286,7 +368,8 @@ def calculate(order):
     warnings = []
     included = str(order.get('status','')).lower() not in EXCLUDED_PROFIT_STATUSES
     if not included: warnings.append('此包裹已取消或退货，预估金额不计入利润合计；实际损益需另行核对')
-    if len(lines)>1: warnings.append('按一个包裹汇总计费；多SKU订单请确认包裹重量及采购单价')
+    if sum(line['quantity'] for line in lines) > 1 and custom_weight is None:
+        warnings.append('多件合发按一包计费，当前为商品重量合计，请按实际整包计费重量核对')
     if inputs.get('template','auto') != 'auto': warnings.append('正在使用手动选择的运费档位')
     return dict(status='ready' if profit is not None else 'incomplete',included_in_summary=included,issues=list(dict.fromkeys(issues)),
                 warnings=warnings,template=template,rate=str(rate),weight_g=str(weight) if weight is not None else None,
@@ -322,8 +405,17 @@ def load_order(db, order_id):
     order['status_changed_at']=detail['changed'] if detail else None
     terminal=order['status'] in ('delivered','cancelled','canceled','returned')
     order['status_label']=(None if terminal else SUBSTATUS_LABELS.get(order['substatus'])) or STATUS_LABELS.get(order['status'],order['status'] or '状态待同步')
-    row = db.execute('SELECT * FROM profit_inputs WHERE order_id=?',(order_id,)).fetchone()
-    order['inputs'] = dict(row) if row else dict(template='auto',rate=None,forwarder='2',other_cost='0',weight_override=None)
+    row = db.execute('''SELECT i.*,COALESCE(ws.origin,'') AS weight_origin,
+        ws.source_order_id AS weight_source_order_id,
+        ws.source_weight_g AS inherited_weight_g,
+        COALESCE(w_source_order.posting,'') AS weight_source_posting
+        FROM profit_inputs i
+        LEFT JOIN profit_weight_sources ws ON ws.order_id=i.order_id
+        LEFT JOIN profit_orders w_source_order ON w_source_order.id=ws.source_order_id
+        WHERE i.order_id=?''',(order_id,)).fetchone()
+    order['inputs'] = dict(row) if row else dict(template='auto',rate=None,forwarder='2',other_cost='0',weight_override=None,weight_origin='',weight_source_order_id=None,inherited_weight_g=None,weight_source_posting='')
+    order['weight_origin'] = order['inputs'].get('weight_origin') or ''
+    order['weight_source_posting'] = order['inputs'].get('weight_source_posting') or ''
     for line in order['lines']:
         previous=latest_purchase_price(db,order['shop'],line['offer_id'],line['sku'],line['id'])
         line['previous_cost'] = previous['purchase_unit'] if previous else None
@@ -332,7 +424,8 @@ def load_order(db, order_id):
 
 def apply_inputs(order, payload, require_confirmation=True):
     if not isinstance(payload,dict) or not isinstance(payload.get('lines'),list): raise ValueError('填写内容格式不正确')
-    prior_weight=number((order.get('inputs') or {}).get('weight_override'),'原计费重量',allow_blank=True)
+    prior_inputs = order.get('inputs') or {}
+    prior_weight=number(prior_inputs.get('weight_override'),'原计费重量',allow_blank=True)
     api_weight=number(order['calculation'].get('api_weight_g'),'API重量',maximum='1000000',allow_blank=True)
     try: supplied = {int(x['id']): x for x in payload['lines'] if isinstance(x,dict) and 'id' in x}
     except (ValueError,TypeError): raise ValueError('商品标识格式不正确') from None
@@ -346,7 +439,13 @@ def apply_inputs(order, payload, require_confirmation=True):
     if not isinstance(inputs,dict): raise ValueError('费用参数格式不正确')
     template = inputs.get('template','auto')
     if template != 'auto' and template not in TEMPLATE_MAP: raise ValueError('运费档位不正确')
-    clean = {'template':template}
+    clean = {
+        'template':template,
+        'weight_origin':prior_inputs.get('weight_origin',''),
+        'weight_source_order_id':prior_inputs.get('weight_source_order_id'),
+        'inherited_weight_g':prior_inputs.get('inherited_weight_g'),
+        'weight_source_posting':prior_inputs.get('weight_source_posting',''),
+    }
     for key,label,maximum,blank,default in (
         ('weight_override','计费重量','1000000',True,None),('rate','合计扣费率','99.99',True,None),
         ('forwarder','货代费','10000000',False,'2'),('other_cost','其他成本','10000000',False,'0')):
@@ -381,6 +480,12 @@ def save_order(db, order, now=None, source='web-save'):
     if old_weight != new_weight:
         db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,?,?,?)',
                    (order['id'],old_weight,new_weight,now,source))
+    if number(old_weight,'原计费重量',maximum='1000000',allow_blank=True) != number(new_weight,'计费重量',maximum='1000000',allow_blank=True):
+        db.execute('''INSERT INTO profit_weight_sources VALUES (?,'manual',NULL,?,NULL)
+            ON CONFLICT(order_id) DO UPDATE SET origin='manual',source_order_id=NULL,
+            recorded_at=excluded.recorded_at,source_weight_g=NULL''',(order['id'],now))
+        order['inputs'].update(weight_origin='manual',weight_source_order_id=None,inherited_weight_g=None,weight_source_posting='')
+        order.update(weight_origin='manual',weight_source_posting='')
     for line in order['lines']:
         previous=db.execute('SELECT purchase_unit FROM profit_lines WHERE id=? AND order_id=?',
             (line['id'],order['id'])).fetchone()
@@ -399,6 +504,192 @@ def save_order(db, order, now=None, source='web-save'):
         template=excluded.template,rate=excluded.rate,forwarder=excluded.forwarder,other_cost=excluded.other_cost,updated=excluded.updated''',
         (order['id'],p.get('weight_override'),p.get('template','auto'),p.get('rate'),p.get('forwarder','2'),p.get('other_cost','0'),now))
     inherit_purchase_prices(db,now,order['shop'])
+    inherit_measured_weights(db,now,order['shop'])
+    return order
+
+
+def enrich_order_sync_info(db, order):
+    if not order: return order
+    shop = order['shop']
+    oid = order['id']
+    cost_same_pending, cost_same_all, cost_cross_pending, cost_cross_all = set(), set(), set(), set()
+    for line in order.get('lines') or []:
+        field, val = ('offer_id', line.get('offer_id') or '') if (line.get('offer_id') or '') else ('sku', line.get('sku') or '')
+        if not val:
+            continue
+        if line.get('previous_cost') is None:
+            cross = db.execute('''SELECT l.purchase_unit,o.posting,o.shop_name,
+                COALESCE(s.recorded_at,i.updated,o.created) AS price_recorded_at
+                FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+                LEFT JOIN profit_inputs i ON i.order_id=o.id
+                LEFT JOIN profit_purchase_sources s ON s.line_id=l.id
+                WHERE o.shop<>? AND l.'''+field+'''=? AND l.id<>?
+                AND l.purchase_unit IS NOT NULL AND trim(l.purchase_unit)!=''
+                AND COALESCE(s.origin,'manual')='manual'
+                AND lower(o.status) NOT IN ('cancelled','canceled','returned')
+                ORDER BY COALESCE(s.recorded_at,i.updated,o.created) DESC,o.created DESC,l.id DESC LIMIT 1''',
+                (shop, val, line['id'])).fetchone()
+            if cross:
+                line['previous_cost'] = cross['purchase_unit']
+                line['previous_cost_shop'] = cross['shop_name']
+                line['previous_cost_posting'] = cross['posting']
+        rows = db.execute('''SELECT o.id AS order_id,o.shop,l.purchase_unit,COALESCE(s.origin,'') AS origin
+            FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+            LEFT JOIN profit_purchase_sources s ON s.line_id=l.id
+            WHERE o.id<>? AND l.'''+field+'''=?
+            AND lower(o.status) NOT IN ('cancelled','canceled','returned')''',
+            (oid, val)).fetchall()
+        for r in rows:
+            is_pending = (r['purchase_unit'] is None or str(r['purchase_unit']).strip() == '' or r['origin'] == 'inherited')
+            if r['shop'] == shop:
+                cost_same_all.add(r['order_id'])
+                if is_pending: cost_same_pending.add(r['order_id'])
+            else:
+                cost_cross_all.add(r['order_id'])
+                if is_pending: cost_cross_pending.add(r['order_id'])
+
+    weight_same_pending, weight_same_all, weight_cross_pending, weight_cross_all = set(), set(), set(), set()
+    order['previous_weight'] = None
+    lines = order.get('lines') or []
+    if len(lines) == 1:
+        line = lines[0]
+        field, val = ('offer_id', line.get('offer_id') or '') if (line.get('offer_id') or '') else ('sku', line.get('sku') or '')
+        if val:
+            ref = latest_measured_weight(db,shop,line['quantity'],line['offer_id'],line['sku'],oid)
+            if ref:
+                order['previous_weight'] = dict(weight_g=ref['weight_override'],posting=ref['posting'])
+            w_rows = db.execute('''SELECT o.id AS order_id,i.weight_override
+                FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+                LEFT JOIN profit_inputs i ON i.order_id=o.id
+                LEFT JOIN profit_weight_sources ws ON ws.order_id=o.id
+                WHERE o.id<>? AND o.shop=? AND l.'''+field+'''=? AND l.quantity=?
+                AND COALESCE(ws.origin,'')!='manual'
+                AND lower(o.status) NOT IN ('cancelled','canceled','returned')
+                AND (SELECT COUNT(*) FROM profit_lines l2 WHERE l2.order_id=o.id)=1''',
+                (oid,shop,val,line['quantity'])).fetchall()
+            for row in w_rows:
+                weight_same_all.add(row['order_id'])
+                if row['weight_override'] is None:
+                    weight_same_pending.add(row['order_id'])
+
+    order['batch_sync'] = dict(
+        has_candidates=bool(cost_same_all or cost_cross_all or weight_same_all or weight_cross_all),
+        single_line=(len(lines) == 1),
+        can_sync_weight=(len(lines) == 1),
+        total_same_all=len(cost_same_all | weight_same_all),
+        total_cross_all=len(cost_cross_all | weight_cross_all),
+        cost_same_shop_pending=len(cost_same_pending),
+        cost_same_shop_all=len(cost_same_all),
+        cost_cross_shop_pending=len(cost_same_pending | cost_cross_pending),
+        cost_cross_shop_all=len(cost_same_all | cost_cross_all),
+        weight_same_shop_pending=len(weight_same_pending),
+        weight_same_shop_all=len(weight_same_all),
+        weight_cross_shop_pending=len(weight_same_pending | weight_cross_pending),
+        weight_cross_shop_all=len(weight_same_all | weight_cross_all),
+        cost=dict(
+            same_shop_pending=len(cost_same_pending),
+            same_shop_all=len(cost_same_all),
+            all_shops_pending=len(cost_same_pending | cost_cross_pending),
+            all_shops_all=len(cost_same_all | cost_cross_all),
+            cross_shop_count=len(cost_cross_all),
+        ),
+        weight=dict(
+            same_shop_pending=len(weight_same_pending),
+            same_shop_all=len(weight_same_all),
+            all_shops_pending=len(weight_same_pending | weight_cross_pending),
+            all_shops_all=len(weight_same_all | weight_cross_all),
+            cross_shop_count=len(weight_cross_all),
+        ),
+    )
+    return order
+
+
+def batch_sync_from_order(db, order, sync_options, now=None, source='batch-sync'):
+    now = time.time() if now is None else now
+    if not isinstance(sync_options, dict):
+        return dict(cost_orders=0, weight_orders=0, total_orders=0)
+    sync_cost = bool(sync_options.get('sync_cost'))
+    sync_weight = bool(sync_options.get('sync_weight'))
+    scope = sync_options.get('scope', 'pending')
+    if scope not in ('pending', 'all'):
+        raise ValueError('批量同步范围参数不正确')
+    cross_shop = bool(sync_options.get('cross_shop', False))
+    oid = order['id']
+    shop = order['shop']
+    cost_orders, weight_orders = set(), set()
+
+    if sync_cost:
+        for line in order.get('lines') or []:
+            cost = number(line.get('purchase_unit'), '采购单价', allow_blank=True)
+            if cost is None:
+                continue
+            field, val = ('offer_id', line.get('offer_id') or '') if (line.get('offer_id') or '') else ('sku', line.get('sku') or '')
+            if not val:
+                continue
+            cost_str = str(cost)
+            # Ensure the source line itself is recorded as manual source
+            db.execute('''INSERT INTO profit_purchase_sources VALUES (?,'manual',NULL,?,NULL)
+                ON CONFLICT(line_id) DO UPDATE SET origin='manual',source_line_id=NULL,
+                recorded_at=excluded.recorded_at,source_purchase_unit=NULL''', (line['id'], now))
+            line.update(purchase_origin='manual', purchase_source_line_id=None,
+                inherited_purchase_unit=None, purchase_source_posting='')
+            query = '''SELECT l.id AS line_id,l.order_id,l.purchase_unit,COALESCE(s.origin,'') AS origin
+                FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+                LEFT JOIN profit_purchase_sources s ON s.line_id=l.id
+                WHERE o.id<>? AND l.'''+field+'''=?
+                AND lower(o.status) NOT IN ('cancelled','canceled','returned')'''
+            args = [oid, val]
+            if not cross_shop:
+                query += ' AND o.shop=?'; args.append(shop)
+            for target in db.execute(query, args).fetchall():
+                t_cost = number(target['purchase_unit'], '目标采购单价', allow_blank=True)
+                is_pending = (t_cost is None or target['origin'] == 'inherited')
+                if scope == 'pending' and not is_pending:
+                    continue
+                if t_cost == cost and target['origin'] == 'inherited':
+                    continue
+                db.execute('UPDATE profit_lines SET purchase_unit=?,updated=? WHERE id=?',
+                           (cost_str, now, target['line_id']))
+                db.execute('''INSERT INTO profit_purchase_sources VALUES (?,'inherited',?,?,?)
+                    ON CONFLICT(line_id) DO UPDATE SET origin='inherited',source_line_id=excluded.source_line_id,
+                    recorded_at=excluded.recorded_at,source_purchase_unit=excluded.source_purchase_unit''',
+                    (target['line_id'], line['id'], now, cost_str))
+                cost_orders.add(target['order_id'])
+
+    lines = order.get('lines') or []
+    if sync_weight and len(lines) == 1 and order['inputs'].get('weight_origin') == 'manual':
+        weight = number(order['inputs'].get('weight_override'),'计费重量',maximum='1000000',allow_blank=True)
+        line = lines[0]
+        field, value = ('offer_id',line['offer_id']) if line.get('offer_id') else ('sku',line.get('sku'))
+        if weight is not None and 0 < weight <= 25000 and value:
+            targets = db.execute('''SELECT o.id AS order_id,i.weight_override
+                FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
+                LEFT JOIN profit_inputs i ON i.order_id=o.id
+                LEFT JOIN profit_weight_sources ws ON ws.order_id=o.id
+                WHERE o.id<>? AND o.shop=? AND l.'''+field+'''=? AND l.quantity=?
+                AND (ws.origin='inherited' OR (ws.origin IS NULL AND i.weight_override IS NULL))
+                AND lower(o.status) NOT IN ('cancelled','canceled','returned')
+                AND (SELECT COUNT(*) FROM profit_lines l2 WHERE l2.order_id=o.id)=1''',
+                (oid,shop,value,line['quantity'])).fetchall()
+            for target in targets:
+                old = number(target['weight_override'],'原计费重量',maximum='1000000',allow_blank=True)
+                if old == weight or (scope == 'pending' and old is not None):
+                    continue
+                db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,?,?,?)',
+                           (target['order_id'],target['weight_override'],str(weight),now,source))
+                db.execute('''INSERT INTO profit_inputs(order_id,weight_override,template,rate,forwarder,other_cost,updated)
+                    VALUES (?,?,'auto',NULL,'2','0',?)
+                    ON CONFLICT(order_id) DO UPDATE SET weight_override=excluded.weight_override,updated=excluded.updated''',
+                    (target['order_id'],str(weight),now))
+                db.execute("INSERT OR REPLACE INTO profit_weight_sources VALUES (?,'inherited',?,?,?)",
+                           (target['order_id'],oid,now,str(weight)))
+                weight_orders.add(target['order_id'])
+
+    return dict(
+        cost_orders=len(cost_orders),
+        weight_orders=len(weight_orders),
+        total_orders=len(cost_orders | weight_orders),
+    )
 
 def entry_url(settings_path=None):
     path = Path(settings_path) if settings_path else Path(__file__).with_name('profit-web.json')
