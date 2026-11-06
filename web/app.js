@@ -2,6 +2,7 @@
 const $=id=>document.getElementById(id), base='/ozon-profit/api';
 let csrf='',current=null,state='',orders=[],timer=null,previewSerial=0,editRevision=0,loading=false,loadSerial=0;
 let weightMode='api',confirmedWeight='';
+let parcelWeights={};
 let costRange={from:'',to:''},costSerial=0,costOverviewSerial=0,imagesLoading=false,costOffset=0,costDetailOrders=[];
 let titleLanguage='zh';
 try{titleLanguage=localStorage.getItem('ozon-title-language')||'zh';}catch{}
@@ -382,6 +383,8 @@ async function openOrder(id){
     $('save-status').textContent='修改后请保存';$('save').disabled=false;$('save').textContent='保存核算';
     showCalculation(c);
     updateLineSubtotals();
+    parcelWeights={};
+    showParcelComparison(current.parcel_comparison,true);
     for(const button of $('product-fields').querySelectorAll('[data-cost]'))button.addEventListener('click',()=>{$('cost-'+button.dataset.cost).value=button.dataset.value;changed();});
     $('detail').showModal();
   }catch(error){notice(error.message);}finally{loading=false;}
@@ -412,17 +415,66 @@ function updateLineSubtotals(){
     $('price-subtotal-'+line.id).textContent='售价合计 · '+subtotal(price);
   }
 }
+function showParcelComparison(data,reset=false){
+  const panel=$('parcel-comparison');
+  panel.hidden=!data;
+  if(reset){
+    panel.open=false;
+    $('parcel-weights').innerHTML='';
+  }
+  if(!data)return;
+  const {packages,plans,best,spread,forwarder}=data;
+  let summary='补齐资料后比较';
+  if(best!=null){
+    if(Number(spread)===0)summary='合发与拆发费用相同';
+    else if(best===0)summary=`合发预计省 ${money(spread)}`;
+    else summary=`${plans[best].parts.reduce((n,part)=>n+part.count,0)} 包预计省 ${money(spread)}`;
+  }
+  $('parcel-summary').textContent=summary;
+  $('parcel-plans').innerHTML=plans.map((plan,index)=>{
+    const breakdown=plan.parts.map(({key,count})=>{
+      const p=packages[key];
+      return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克 · ${esc(p.tier)}`;
+    }).join('<br>');
+    return `<div class="parcel-plan${index===best?' is-best':''}"><div><b>${esc(plan.label)}</b><small>${breakdown}</small></div><strong>${money(plan.cost)}</strong></div>`;
+  }).join('');
+  const fields=$('parcel-weights');
+  if(!fields.childElementCount){
+    fields.innerHTML=Object.entries(packages).map(([key,p])=>`<label>${esc(p.label)}<input type="text" inputmode="decimal" maxlength="18" data-parcel-weight="${esc(key)}" autocomplete="off" placeholder="${esc(p.default_weight==null?'填写克数':Number(p.default_weight))}"><small data-parcel-source="${esc(key)}"></small></label>`).join('');
+  }
+  for(const input of fields.querySelectorAll('[data-parcel-weight]')){
+    const p=packages[input.dataset.parcelWeight];
+    input.placeholder=p.default_weight==null?'填写克数':String(Number(p.default_weight));
+    fields.querySelector(`[data-parcel-source="${input.dataset.parcelWeight}"]`).textContent=p.source;
+  }
+  $('parcel-note').textContent=`货代费 ${money(forwarder)}/包。试算独立于正式核算，平台扣费和包材差额另计。拆前请在妙手确认可拆、线路和报价。`;
+}
+function queuePreview(){
+  previewSerial++;
+  if(!$('parcel-comparison').hidden)$('parcel-summary').textContent='更新中…';
+  clearTimeout(timer);timer=setTimeout(preview,300);
+}
 function changed(){
   updateWeightConfirmation();
   updateLineSubtotals();
   editRevision++;$('save-status').textContent='有修改，尚未保存';
   $('profit').textContent='计算中…';$('margin').textContent='';
-  clearTimeout(timer);timer=setTimeout(preview,300);
+  queuePreview();
 }
 async function preview(){
   const serial=++previewSerial,id=current.id,revision=editRevision;
-  try{const result=await api('/orders/'+id+'/preview',payload());if(serial===previewSerial&&revision===editRevision&&current.id===id)showCalculation(result.order.calculation);}
-  catch(error){if(serial===previewSerial){$('profit').textContent='—';$('margin').textContent='输入有误';$('calc-note').textContent=error.message;}}
+  try{
+    const result=await api('/orders/'+id+'/preview',{...payload(),parcel_weights:parcelWeights});
+    if(serial===previewSerial&&revision===editRevision&&current.id===id){
+      showCalculation(result.order.calculation);
+      showParcelComparison(result.order.parcel_comparison);
+    }
+  }catch(error){
+    if(serial===previewSerial){
+      $('profit').textContent='—';$('margin').textContent='输入有误';$('calc-note').textContent=error.message;
+      $('parcel-summary').textContent='试算待更新';
+    }
+  }
 }
 $('weight-custom').addEventListener('input',event=>{
   weightMode=event.target.checked?'custom':'api';confirmedWeight='';$('weight-confirm').checked=false;
@@ -444,6 +496,14 @@ $('weight-suggestion')?.addEventListener('click',()=>{
 });
 $('weight-confirm').addEventListener('input',event=>{confirmedWeight=event.target.checked?$('weight').value:'';changed();});
 $('edit-form').addEventListener('input',event=>{
+  const key=event.target.dataset.parcelWeight;
+  if(key){
+    const value=event.target.value.trim();
+    if(value)parcelWeights[key]=value;
+    else delete parcelWeights[key];
+    queuePreview();
+    return;
+  }
   if(event.target.id==='weight'){confirmedWeight='';$('weight-confirm').checked=false;}
   if(event.target.matches('input,select'))changed();
 });
@@ -456,11 +516,16 @@ $('edit-form').addEventListener('submit',async event=>{
   try{const result=await api('/orders/'+current.id,payload());
     if(revision===editRevision){
       current=result.order;showCalculation(current.calculation);
+      if(Object.keys(parcelWeights).length)queuePreview();
+      else showParcelComparison(current.parcel_comparison);
       for(const line of current.lines){const note=$('reuse-note-'+line.id);if(note&&line.purchase_origin!=='inherited')note.textContent='已保存本单采购价';}
       $('save-status').textContent='已保存，下次打开仍会保留';
     }else $('save-status').textContent='已保存先前内容；新修改请再次保存';
     await loadOrders();
   }catch(error){$('save-status').textContent=error.message;}finally{$('save').disabled=false;}
+});
+$('parcel-weights').addEventListener('keydown',event=>{
+  if(event.key==='Enter')event.preventDefault();
 });
 $('close').addEventListener('click',()=>{if($('save').disabled)return;$('detail').close();clearTimeout(timer);previewSerial++;});
 $('detail').addEventListener('cancel',event=>{if($('save').disabled)event.preventDefault();clearTimeout(timer);previewSerial++;});

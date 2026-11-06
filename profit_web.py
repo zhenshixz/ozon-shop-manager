@@ -10,6 +10,7 @@ import time
 from flask import Flask, request, session, jsonify, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 import profit_core as core
+import parcel_comparison
 import product_status
 
 PREFIX = '/ozon-profit'
@@ -158,6 +159,7 @@ def create_app(settings=None):
     @app.post(PREFIX+'/api/orders/<int:order_id>/preview')
     def detail(order_id):
         synced=None
+        trial_weights=None
         with core.connection(database) as db:
             order=core.load_order(db,order_id)
             if not order: return jsonify(error='订单不存在'),404
@@ -165,6 +167,8 @@ def create_app(settings=None):
                 payload=request.get_json(silent=True)
                 preview=request.path.endswith('/preview')
                 order=core.apply_inputs(order,payload,require_confirmation=not preview)
+                if preview:
+                    trial_weights=payload.get('parcel_weights')
                 if not preview:
                     audit_base=dict(channel='web-save',session=session.setdefault('audit_id',secrets.token_hex(8)),
                         request_id=secrets.token_hex(8),user_agent=request.user_agent.string[:160],
@@ -175,6 +179,7 @@ def create_app(settings=None):
                         batch_audit=json.dumps({**audit_base,'channel':'web-batch-sync','source_order_id':order_id},ensure_ascii=True)
                         synced=core.batch_sync_from_order(db,order,payload['batch_sync'],source=batch_audit)
             core.enrich_order_sync_info(db,order)
+            order['parcel_comparison']=parcel_comparison.compare(db,order,trial_weights)
         product_status.annotate_orders([order])
         return jsonify(order=order,synced=synced)
 

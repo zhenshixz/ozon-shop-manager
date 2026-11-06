@@ -210,6 +210,30 @@ class ProfitTest(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         self.assertEqual(response.json['order']['calculation']['profit'],'7.53')
 
+    def test_parcel_comparison_uses_trial_weights_without_saving(self):
+        self.post.update(posting_number='MULTI-1',order_number='MULTI')
+        self.post['products'][0].update(quantity=3,weight=.2,price={'amount':'60','currency':'CNY'})
+        with p.connection(self.path) as db:
+            p.capture_postings(db,self.shop,'fbs',[self.post],time.time())
+        app=create_app({'database':str(self.path),'secret_key':'test-key','secure_cookie':False,'public_access':True})
+        client=app.test_client()
+        path='/ozon-profit/api/orders/2'
+        token=client.get('/ozon-profit/api/bootstrap').json['csrf']
+        order=client.get(path).json['order']
+        self.assertIsNone(order['calculation']['profit'])
+        comparison=order['parcel_comparison']
+        self.assertEqual([plan['cost'] for plan in comparison['plans']],['32.00','24.62','29.52'])
+        self.assertEqual(comparison['best'],1)
+
+        result=client.post(path+'/preview',headers={'X-CSRF-Token':token},json={
+            'lines':[{'id':order['lines'][0]['id'],'purchase_unit':'','price_override':''}],
+            'inputs':{},'parcel_weights':{'two':'500'},
+        }).json['order']
+        self.assertEqual(result['calculation'],order['calculation'])
+        self.assertEqual(result['parcel_comparison']['packages']['two']['tier'],'低客单轻小件')
+        self.assertEqual(result['parcel_comparison']['best'],2)
+        self.assertEqual(client.get(path).json['order']['parcel_comparison'],comparison)
+
     def test_auth_csrf_preview_save_and_persistence(self):
         app=create_app({'database':str(self.path),'access_token':'test-token','secret_key':'test-key','secure_cookie':False});app.testing=True
         client=app.test_client();prefix='/ozon-profit/api'

@@ -274,3 +274,23 @@
 /* 2026-11-05 Measured Weight Auto-Reuse */
 .weight-field>small.purchase-reuse-note{display:inline-flex;color:#3b6398;font-size:11px;line-height:1.4}
 .price-row .purchase-reuse-badge+.purchase-reuse-badge{margin-left:4px}
+.parcel-comparison{margin:17px 0 0;border:1px solid #dfe8f4;border-radius:11px;background:#f6f9fd}
+.parcel-comparison>summary{display:flex;align-items:center;gap:9px;margin:0;padding:12px 13px;list-style:none;color:#304c77;font-weight:600;line-height:1.55}
+.parcel-comparison>summary::-webkit-details-marker{display:none}
+.parcel-comparison>summary::after{content:"";flex:0 0 6px;height:6px;border-right:1.5px solid #6782a7;border-bottom:1.5px solid #6782a7;transform:rotate(45deg);margin:0 2px 3px 0}
+.parcel-comparison[open]>summary::after{transform:rotate(225deg);margin-bottom:0}
+.parcel-summary{flex:1;text-align:right;color:#2f609f;font-weight:600;font-variant-numeric:tabular-nums}
+.parcel-content{padding:0 13px 13px}
+.parcel-heading{margin:0 0 7px;color:#63768f;font-size:11px;font-weight:600}
+.parcel-heading span{margin-left:5px;color:#7b8aa0;font-weight:400}
+.parcel-plans{display:grid;gap:6px;margin-bottom:13px}
+.parcel-plan{display:flex;justify-content:space-between;align-items:flex-start;gap:9px;padding:8px 10px;border:1px solid #e7edf6;border-radius:8px;background:#fff;color:#384c68;font-size:12px;line-height:1.55}
+.parcel-plan.is-best{border-color:#a8c5f3;background:#eef5ff}
+.parcel-plan strong{white-space:nowrap;color:#2b5693;font-variant-numeric:tabular-nums}
+.parcel-plan small{display:block;margin-top:2px;color:#647891;font-size:11px}
+.parcel-weights{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.parcel-weights label{font-size:11px}
+.parcel-weights input{margin-top:4px;min-height:37px;padding:6px 8px}
+.parcel-weights small{margin-top:4px;color:#6a7d97}
+.parcel-note{margin:9px 0 0;color:#687b95;font-size:11px}
+@media(max-width:480px){.parcel-comparison>summary{gap:7px;padding:10px}.parcel-content{padding:0 10px 10px}.parcel-weights{gap:6px}}
