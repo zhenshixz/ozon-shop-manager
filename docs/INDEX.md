@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [实际发货方式计入利润](../MAINTENANCE-20261106-DISPATCH-PLAN.md)
 - [合发 / 拆发试算](../MAINTENANCE-20261106-PARCEL-COMPARISON.md)
 - [多件合发核算与实测重量沿用](../MAINTENANCE-20261106-PACKAGE-WEIGHT.md)
 - [同货号重量沿用的初版记录](../MAINTENANCE-20261105-BATCH-COST-WEIGHT.md)

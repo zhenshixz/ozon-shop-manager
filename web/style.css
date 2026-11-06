@@ -284,8 +284,10 @@
 .parcel-heading{margin:0 0 7px;color:#63768f;font-size:11px;font-weight:600}
 .parcel-heading span{margin-left:5px;color:#7b8aa0;font-weight:400}
 .parcel-plans{display:grid;gap:6px;margin-bottom:13px}
-.parcel-plan{display:flex;justify-content:space-between;align-items:flex-start;gap:9px;padding:8px 10px;border:1px solid #e7edf6;border-radius:8px;background:#fff;color:#384c68;font-size:12px;line-height:1.55}
-.parcel-plan.is-best{border-color:#a8c5f3;background:#eef5ff}
+.parcel-plan{cursor:pointer;display:flex;justify-content:space-between;align-items:flex-start;gap:9px;padding:8px 10px;border:1px solid #e7edf6;border-radius:8px;background:#fff;color:#384c68;font-size:12px;line-height:1.55}
+.parcel-plan.is-selected{border-color:#a8c5f3;background:#eef5ff}
+.parcel-plan input[type=radio]{flex:0 0 15px;width:15px;height:15px;min-height:0;margin:2px 0 0;padding:0;accent-color:var(--blue)}
+.parcel-plan-body{flex:1;min-width:0}
 .parcel-plan strong{white-space:nowrap;color:#2b5693;font-variant-numeric:tabular-nums}
 .parcel-plan small{display:block;margin-top:2px;color:#647891;font-size:11px}
 .parcel-weights{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}

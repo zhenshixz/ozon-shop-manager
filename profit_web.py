@@ -167,19 +167,24 @@ def create_app(settings=None):
                 payload=request.get_json(silent=True)
                 preview=request.path.endswith('/preview')
                 order=core.apply_inputs(order,payload,require_confirmation=not preview)
-                if preview:
-                    trial_weights=payload.get('parcel_weights')
+                trial_weights=payload.get('parcel_weights')
+                if 'dispatch_choice' in payload:
+                    order['dispatch_plan']=parcel_comparison.select(db,order,payload['dispatch_choice'],trial_weights,preview)
+                    order['calculation']=core.calculate(order)
                 if not preview:
                     audit_base=dict(channel='web-save',session=session.setdefault('audit_id',secrets.token_hex(8)),
                         request_id=secrets.token_hex(8),user_agent=request.user_agent.string[:160],
                         weight_mode=payload.get('weight_mode'),api_weight_g=order['calculation']['api_weight_g'])
                     audit=json.dumps(audit_base,ensure_ascii=True)
                     core.save_order(db,order,source=audit)
+                    if 'dispatch_choice' in payload or order.get('dispatch_plan'):
+                        parcel_comparison.save(db,order)
                     if isinstance(payload.get('batch_sync'),dict):
                         batch_audit=json.dumps({**audit_base,'channel':'web-batch-sync','source_order_id':order_id},ensure_ascii=True)
                         synced=core.batch_sync_from_order(db,order,payload['batch_sync'],source=batch_audit)
             core.enrich_order_sync_info(db,order)
-            order['parcel_comparison']=parcel_comparison.compare(db,order,trial_weights)
+            saved_weights=(order.get('dispatch_plan') or {}).get('weights')
+            order['parcel_comparison']=parcel_comparison.compare(db,order,trial_weights if trial_weights is not None else saved_weights)
         product_status.annotate_orders([order])
         return jsonify(order=order,synced=synced)
 

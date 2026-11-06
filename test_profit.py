@@ -234,6 +234,52 @@ class ProfitTest(unittest.TestCase):
         self.assertEqual(result['parcel_comparison']['best'],2)
         self.assertEqual(client.get(path).json['order']['parcel_comparison'],comparison)
 
+    def test_confirmed_dispatch_updates_compass_and_hands_off_to_actual_postings(self):
+        self.post.update(posting_number='DISPATCH-1',order_number='DISPATCH')
+        self.post['products'][0].update(weight=.1,price={'amount':'25','currency':'CNY'})
+        second=dict(self.post['products'][0],offer_id='other',sku=111,weight=.312)
+        self.post['products'].append(second)
+        with p.connection(self.path) as db:
+            p.capture_postings(db,self.shop,'fbs',[self.post],time.time())
+        app=create_app({'database':str(self.path),'secret_key':'test-key','secure_cookie':False,'public_access':True})
+        client=app.test_client()
+        prefix='/ozon-profit/api'
+        path=prefix+'/orders/2'
+        headers={'X-CSRF-Token':client.get(prefix+'/bootstrap').json['csrf']}
+        order=client.get(path).json['order']
+        self.assertEqual(order['calculation']['weight_g'],'412.000')
+        body={'lines':[{'id':l['id'],'purchase_unit':'9.12','price_override':''} for l in order['lines']],
+              'inputs':{},'dispatch_choice':1,'parcel_weights':{'one':'312','two':'312'}}
+        self.assertEqual(client.post(path,json=dict(body,parcel_weights={}),headers=headers).status_code,400)
+        preview=client.post(path+'/preview',json=body,headers=headers).json['order']
+        self.assertEqual(preview['calculation']['profit'],'-0.45')
+        self.assertIsNone(client.get(path).json['order']['dispatch_plan'])
+        saved=client.post(path,json=body,headers=headers).json['order']
+        self.assertEqual(saved['calculation']['profit'],'-0.45')
+        self.assertEqual(client.get(path).json['order']['calculation']['packages'],2)
+        compass=client.get(prefix+'/analytics?q=DISPATCH').json
+        self.assertEqual(compass['summary']['sales'],'50.00')
+        self.assertEqual(compass['summary']['profit'],'-0.45')
+        self.assertEqual(compass['summary']['orders'],1)
+        self.assertEqual(compass['summary']['packages'],2)
+
+        parent=dict(self.post,products=self.post['products'][:1])
+        child=dict(self.post,posting_number='DISPATCH-2',parent_posting_number='DISPATCH-1',products=[second])
+        with p.connection(self.path) as db:
+            p.capture_postings(db,self.shop,'fbs',[parent,child],time.time())
+            p.capture_postings(db,self.shop,'fbs',[parent,child],time.time())
+            ids=[r['id'] for r in db.execute("SELECT id FROM profit_orders WHERE order_number='DISPATCH' ORDER BY id")]
+            postings=[p.load_order(db,oid) for oid in ids]
+            self.assertEqual([len(o['lines']) for o in postings],[1,1])
+            self.assertEqual([o['inputs']['weight_override'] for o in postings],['312','312'])
+            self.assertEqual([o['lines'][0]['purchase_unit'] for o in postings],['9.12','9.12'])
+            self.assertTrue(all(o['dispatch_plan'] is None for o in postings))
+        after=client.get(prefix+'/analytics?q=DISPATCH').json
+        self.assertEqual(after['summary']['sales'],'50.00')
+        self.assertEqual(after['summary']['orders'],1)
+        self.assertEqual(after['summary']['units'],2)
+        self.assertEqual(after['summary']['packages'],2)
+
     def test_auth_csrf_preview_save_and_persistence(self):
         app=create_app({'database':str(self.path),'access_token':'test-token','secret_key':'test-key','secure_cookie':False});app.testing=True
         client=app.test_client();prefix='/ozon-profit/api'

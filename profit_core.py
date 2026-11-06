@@ -106,6 +106,9 @@ def ensure_schema(db):
         CREATE TABLE IF NOT EXISTS profit_weight_sources (
             order_id INTEGER PRIMARY KEY,origin TEXT NOT NULL,source_order_id INTEGER,
             recorded_at REAL NOT NULL,source_weight_g TEXT);
+        CREATE TABLE IF NOT EXISTS profit_dispatch_plans (
+            order_id INTEGER PRIMARY KEY, data TEXT NOT NULL, updated REAL NOT NULL,
+            applied INTEGER NOT NULL DEFAULT 0);
     ''')
     if 'provider' not in {r[1] for r in db.execute('PRAGMA table_info(profit_translation_requests)')}:
         db.execute("ALTER TABLE profit_translation_requests ADD COLUMN provider TEXT NOT NULL DEFAULT 'MyMemory'")
@@ -313,6 +316,9 @@ def capture_postings(db, shop, source, postings, now):
                 weight_g=COALESCE(excluded.weight_g,profit_lines.weight_g),updated=excluded.updated''',
                 (order_id,key,sku,offer,str(item.get('name') or key),quantity,price,str(currency),
                  str(weight) if weight is not None else None,picture,now))
+    if source == 'fbs':
+        from parcel_comparison import apply_to_synced_packages
+        apply_to_synced_packages(db,shop['id'],postings,now)
     inherit_purchase_prices(db,now,shop['id'])
     inherit_measured_weights(db,now,shop['id'])
 
@@ -349,8 +355,10 @@ def calculate(order):
     weight = number(inputs.get('weight_override'),'计费重量',maximum='1000000',allow_blank=True)
     custom_weight = weight
     if weight is None: weight = api_weight if weight_complete else None
-    if weight is None or weight <= 0: issues.append('请填写包裹计费重量')
-    if weight is not None and weight > 25000: issues.append('重量超过附件25千克范围，请单独核算')
+    plan = order.get('dispatch_plan')
+    if not plan:
+        if weight is None or weight <= 0: issues.append('请填写包裹计费重量')
+        if weight is not None and weight > 25000: issues.append('重量超过附件25千克范围，请单独核算')
     tid = inputs.get('template','auto')
     if tid == 'auto':
         # Invalid/missing weights already block profit above. A provisional
@@ -363,16 +371,26 @@ def calculate(order):
     forwarder = number(inputs.get('forwarder','2'),'货代费')
     other = number(inputs.get('other_cost','0'),'其他成本')
     shipping = D(template['fix']) + D(template['per_g'])*weight if weight is not None else None
+    packages = 1
+    line_logistics = {}
+    if plan:
+        from parcel_comparison import split_shipping
+        shipping,line_logistics = split_shipping(lines,plan,forwarder)
+        packages = len(plan['packages'])
+        forwarder *= packages
     fee = revenue*rate/100
     profit = None if issues else revenue-purchase-shipping-fee-forwarder-other
     warnings = []
     included = str(order.get('status','')).lower() not in EXCLUDED_PROFIT_STATUSES
     if not included: warnings.append('此包裹已取消或退货，预估金额不计入利润合计；实际损益需另行核对')
-    if sum(line['quantity'] for line in lines) > 1 and custom_weight is None:
+    if plan:
+        warnings.append(f'按已选方案分 {packages} 包计费，平台扣费按本单费率估算')
+    elif sum(line['quantity'] for line in lines) > 1 and custom_weight is None:
         warnings.append('多件合发按一包计费，当前为商品重量合计，请按实际整包计费重量核对')
     if inputs.get('template','auto') != 'auto': warnings.append('正在使用手动选择的运费档位')
     return dict(status='ready' if profit is not None else 'incomplete',included_in_summary=included,issues=list(dict.fromkeys(issues)),
-                warnings=warnings,template=template,rate=str(rate),weight_g=str(weight) if weight is not None else None,
+                warnings=warnings,template=template,rate=str(rate),packages=packages,line_logistics=line_logistics,
+                weight_g=str(weight) if weight is not None else None,
                 api_weight_g=str(api_weight) if weight_complete else None,
                 weight_source='custom' if custom_weight is not None else ('api' if weight_complete else 'missing'),
                 custom_weight_g=str(custom_weight) if custom_weight is not None else None,revenue=money(revenue),
@@ -419,6 +437,8 @@ def load_order(db, order_id):
     for line in order['lines']:
         previous=latest_purchase_price(db,order['shop'],line['offer_id'],line['sku'],line['id'])
         line['previous_cost'] = previous['purchase_unit'] if previous else None
+    from parcel_comparison import saved_plan
+    order['dispatch_plan'] = saved_plan(db,order)
     order['calculation'] = calculate(order)
     return order
 

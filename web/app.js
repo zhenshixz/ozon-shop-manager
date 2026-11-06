@@ -2,7 +2,7 @@
 const $=id=>document.getElementById(id), base='/ozon-profit/api';
 let csrf='',current=null,state='',orders=[],timer=null,previewSerial=0,editRevision=0,loading=false,loadSerial=0;
 let weightMode='api',confirmedWeight='';
-let parcelWeights={};
+let parcelWeights={},dispatchChoice=0;
 let costRange={from:'',to:''},costSerial=0,costOverviewSerial=0,imagesLoading=false,costOffset=0,costDetailOrders=[];
 let titleLanguage='zh';
 try{titleLanguage=localStorage.getItem('ozon-title-language')||'zh';}catch{}
@@ -307,6 +307,7 @@ function renderOrders(){
 }
 function purchaseReuseBadge(order){
   const badges=[];
+  if(order.dispatch_plan)badges.push(`<span class="purchase-reuse-badge">拆发 ${order.calculation.packages} 包</span>`);
   const reused=order.lines.filter(line=>line.purchase_origin==='inherited');
   if(reused.length){
     const sources=[...new Set(reused.map(line=>line.purchase_source_posting).filter(Boolean))];
@@ -351,7 +352,9 @@ function updateWeightReuseUI(){
   }
 }
 function payload(){
-  return {lines:current.lines.map(l=>({id:l.id,purchase_unit:$('cost-'+l.id).value,price_override:$('price-'+l.id).value})),inputs:{weight_override:weightMode==='custom'?$('weight').value:null,template:$('template').value,rate:$('rate').value,forwarder:$('forwarder').value,other_cost:$('other').value},weight_mode:weightMode,weight_confirmed:confirmedWeight!==''&&confirmedWeight===$('weight').value,expected_api_weight_g:current.calculation.api_weight_g,expected_weight_override:current.inputs.weight_override??null};
+  const body={lines:current.lines.map(l=>({id:l.id,purchase_unit:$('cost-'+l.id).value,price_override:$('price-'+l.id).value})),inputs:{weight_override:weightMode==='custom'?$('weight').value:null,template:$('template').value,rate:$('rate').value,forwarder:$('forwarder').value,other_cost:$('other').value},weight_mode:weightMode,weight_confirmed:confirmedWeight!==''&&confirmedWeight===$('weight').value,expected_api_weight_g:current.calculation.api_weight_g,expected_weight_override:current.inputs.weight_override??null};
+  if(current.parcel_comparison)Object.assign(body,{dispatch_choice:dispatchChoice,parcel_weights:parcelWeights});
+  return body;
 }
 function updateWeightConfirmation(){
   if(!current)return;
@@ -383,7 +386,8 @@ async function openOrder(id){
     $('save-status').textContent='修改后请保存';$('save').disabled=false;$('save').textContent='保存核算';
     showCalculation(c);
     updateLineSubtotals();
-    parcelWeights={};
+    parcelWeights={...current.dispatch_plan?.weights};
+    dispatchChoice=current.dispatch_plan?.choice??0;
     showParcelComparison(current.parcel_comparison,true);
     for(const button of $('product-fields').querySelectorAll('[data-cost]'))button.addEventListener('click',()=>{$('cost-'+button.dataset.cost).value=button.dataset.value;changed();});
     $('detail').showModal();
@@ -399,8 +403,9 @@ function showCalculation(c){
   $('profit').textContent=money(c.profit);$('profit').classList.toggle('negative',Number(c.profit)<0);
   $('margin').textContent=c.sales_margin==null?'待补齐资料':`销售利润率 ${c.sales_margin}%`;
   if(!$('rate').value)$('rate').placeholder=`当前档位默认 ${c.rate}%`;
-  const freightLabel=c.weight_g==null||Number(c.weight_g)<=0?'运费 · 待补计费重量':Number(c.weight_g)>25000?'运费 · 超出25千克范围':`运费 · ${$('template').value==='auto'?'自动匹配 · ':''}${c.template.name} / ${Number(c.weight_g)}克`;
-  const values=[['核算售价合计',c.revenue],['采购成本合计',c.purchase_cost],[freightLabel,c.shipping],[`平台合计扣费 · ${c.rate}%`,c.platform_fee],['货代费',c.forwarder],['其他成本',c.other_cost]];
+  $('profit-title').textContent=c.packages>1?'整单预估利润':'本包裹预估利润';
+  const freightLabel=c.packages>1?`运费 · ${c.packages} 包合计`:c.weight_g==null||Number(c.weight_g)<=0?'运费 · 待补计费重量':Number(c.weight_g)>25000?'运费 · 超出25千克范围':`运费 · ${$('template').value==='auto'?'自动匹配 · ':''}${c.template.name} / ${Number(c.weight_g)}克`;
+  const values=[['核算售价合计',c.revenue],['采购成本合计',c.purchase_cost],[freightLabel,c.shipping],[`平台合计扣费 · ${c.rate}%`,c.platform_fee],[c.packages>1?`货代费 · ${c.packages} 包合计`:'货代费',c.forwarder],['其他成本',c.other_cost]];
   $('breakdown').innerHTML=values.map(([label,value])=>`<div class="break-row"><span>${esc(label)}</span><b>${money(value)}</b></div>`).join('');
   $('calc-note').textContent=[...c.issues,...c.warnings,c.profit_exact!=null?`未取整利润 ${c.profit_exact} 元；运费未取整 ${c.shipping_exact} 元。`:''].filter(Boolean).join('；');
 }
@@ -419,7 +424,7 @@ function showParcelComparison(data,reset=false){
   const panel=$('parcel-comparison');
   panel.hidden=!data;
   if(reset){
-    panel.open=false;
+    panel.open=dispatchChoice>0;
     $('parcel-weights').innerHTML='';
   }
   if(!data)return;
@@ -430,24 +435,33 @@ function showParcelComparison(data,reset=false){
     else if(best===0)summary=`合发预计省 ${money(spread)}`;
     else summary=`${plans[best].parts.reduce((n,part)=>n+part.count,0)} 包预计省 ${money(spread)}`;
   }
+  if(dispatchChoice>0 && plans[dispatchChoice]){
+    const count=plans[dispatchChoice].parts.reduce((n,part)=>n+part.count,0);
+    summary=`已选拆发 ${count} 包`;
+  }
   $('parcel-summary').textContent=summary;
+  const restoreFocus=document.activeElement?.name==='dispatch-choice';
   $('parcel-plans').innerHTML=plans.map((plan,index)=>{
     const breakdown=plan.parts.map(({key,count})=>{
       const p=packages[key];
       return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克 · ${esc(p.tier)}`;
     }).join('<br>');
-    return `<div class="parcel-plan${index===best?' is-best':''}"><div><b>${esc(plan.label)}</b><small>${breakdown}</small></div><strong>${money(plan.cost)}</strong></div>`;
+    return `<label class="parcel-plan${index===dispatchChoice?' is-selected':''}"><input type="radio" name="dispatch-choice" value="${index}" ${index===dispatchChoice?'checked':''}><span class="parcel-plan-body"><b>${esc(plan.label)}</b><small>${breakdown}</small></span><strong>${money(plan.cost)}</strong></label>`;
   }).join('');
+  if(restoreFocus)$('parcel-plans').querySelector(':checked')?.focus();
   const fields=$('parcel-weights');
   if(!fields.childElementCount){
-    fields.innerHTML=Object.entries(packages).map(([key,p])=>`<label>${esc(p.label)}<input type="text" inputmode="decimal" maxlength="18" data-parcel-weight="${esc(key)}" autocomplete="off" placeholder="${esc(p.default_weight==null?'填写克数':Number(p.default_weight))}"><small data-parcel-source="${esc(key)}"></small></label>`).join('');
+    fields.innerHTML=Object.entries(packages).filter(([key])=>key!=='all').map(([key,p])=>`<label>${esc(p.label)}<input type="text" inputmode="decimal" maxlength="18" data-parcel-weight="${esc(key)}" autocomplete="off" value="${esc(parcelWeights[key]??'')}"><small data-parcel-source="${esc(key)}"></small></label>`).join('');
   }
+  const selectedKeys=plans[dispatchChoice]?.parts.map(part=>part.key)||[];
+  $('parcel-weight-area').hidden=dispatchChoice===0;
   for(const input of fields.querySelectorAll('[data-parcel-weight]')){
-    const p=packages[input.dataset.parcelWeight];
+    const key=input.dataset.parcelWeight,p=packages[key];
+    input.closest('label').hidden=!selectedKeys.includes(key);
     input.placeholder=p.default_weight==null?'填写克数':String(Number(p.default_weight));
-    fields.querySelector(`[data-parcel-source="${input.dataset.parcelWeight}"]`).textContent=p.source;
+    fields.querySelector(`[data-parcel-source="${key}"]`).textContent=parcelWeights[key]?'手动核实':key.includes('-')?'留空沿用首包':'API 估重参考';
   }
-  $('parcel-note').textContent=`货代费 ${money(forwarder)}/包。试算独立于正式核算，平台扣费和包材差额另计。拆前请在妙手确认可拆、线路和报价。`;
+  $('parcel-note').textContent=`货代费 ${money(forwarder)}/包。按实际发货方式选择并保存后计入利润。平台扣费沿用本单费率。`;
 }
 function queuePreview(){
   previewSerial++;
@@ -464,7 +478,7 @@ function changed(){
 async function preview(){
   const serial=++previewSerial,id=current.id,revision=editRevision;
   try{
-    const result=await api('/orders/'+id+'/preview',{...payload(),parcel_weights:parcelWeights});
+    const result=await api('/orders/'+id+'/preview',payload());
     if(serial===previewSerial&&revision===editRevision&&current.id===id){
       showCalculation(result.order.calculation);
       showParcelComparison(result.order.parcel_comparison);
@@ -496,12 +510,17 @@ $('weight-suggestion')?.addEventListener('click',()=>{
 });
 $('weight-confirm').addEventListener('input',event=>{confirmedWeight=event.target.checked?$('weight').value:'';changed();});
 $('edit-form').addEventListener('input',event=>{
+  if(event.target.name==='dispatch-choice'){
+    dispatchChoice=Number(event.target.value);
+    changed();
+    return;
+  }
   const key=event.target.dataset.parcelWeight;
   if(key){
     const value=event.target.value.trim();
     if(value)parcelWeights[key]=value;
     else delete parcelWeights[key];
-    queuePreview();
+    changed();
     return;
   }
   if(event.target.id==='weight'){confirmedWeight='';$('weight-confirm').checked=false;}
@@ -516,8 +535,7 @@ $('edit-form').addEventListener('submit',async event=>{
   try{const result=await api('/orders/'+current.id,payload());
     if(revision===editRevision){
       current=result.order;showCalculation(current.calculation);
-      if(Object.keys(parcelWeights).length)queuePreview();
-      else showParcelComparison(current.parcel_comparison);
+      showParcelComparison(current.parcel_comparison);
       for(const line of current.lines){const note=$('reuse-note-'+line.id);if(note&&line.purchase_origin!=='inherited')note.textContent='已保存本单采购价';}
       $('save-status').textContent='已保存，下次打开仍会保留';
     }else $('save-status').textContent='已保存先前内容；新修改请再次保存';
