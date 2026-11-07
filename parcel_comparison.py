@@ -63,6 +63,7 @@ def compare(db, order, trial_weights=None):
     forwarding = core.number(inputs.get('forwarder', '2'), '货代费')
     packages = {}
     exact = {}
+    platform_exact = {}
 
     def add_package(key, label, items, default_weight, source, template='auto', reference_posting=None):
         weight = default_weight
@@ -83,6 +84,7 @@ def compare(db, order, trial_weights=None):
             error = '请先补充人民币核算售价'
         if not error:
             exact[key] = core.D(quote['shipping_exact']) + forwarding
+            platform_exact[key] = core.D(quote['platform_fee_exact'])
         packages[key] = dict(label=label, weight=None if weight is None else str(weight),
                              default_weight=None if default_weight is None else str(default_weight),
                              source=source, error=error, revenue=None if error else quote['revenue'],
@@ -122,10 +124,13 @@ def compare(db, order, trial_weights=None):
                 source = 'API 估重' if package['source']=='API 估重' else '同首包重量'
                 add_package(repeated,f'第 {index} 包',items,package['weight'],source)
                 parcels.append(repeated)
-        cost = None
+        cost = platform_fee = total_cost = None
         if all(key in exact for key in parcels):
             cost = core.money(sum(exact[key] for key in parcels))
-        plans.append(dict(label=label,parts=[dict(key=key,count=1) for key in parcels],cost=cost))
+            platform_fee = core.money(sum(platform_exact[key] for key in parcels))
+            total_cost = sum(exact[key]+platform_exact[key] for key in parcels)
+        plans.append(dict(label=label,parts=[dict(key=key,count=1) for key in parcels],cost=cost,
+                          platform_fee=platform_fee,total_cost=core.money(total_cost)))
 
     add_plan('合发 1 包', [('all', 1)])
     if quantities == [1, 1]:
@@ -142,11 +147,13 @@ def compare(db, order, trial_weights=None):
             add_plan('拆 2 包 · 1+1', [('one', 2)])
 
     best = spread = None
-    if all(plan['cost'] is not None for plan in plans):
-        ranked = sorted(range(len(plans)), key=lambda i: core.D(plans[i]['cost']))
+    if all(plan['total_cost'] is not None for plan in plans):
+        def total(index):
+            return sum(exact[part['key']]+platform_exact[part['key']] for part in plans[index]['parts'])
+        ranked = sorted(range(len(plans)), key=total)
         best = ranked[0]
         alternative = ranked[1] if best == 0 else 0
-        spread = core.money(core.D(plans[alternative]['cost']) - core.D(plans[best]['cost']))
+        spread = core.money(total(alternative) - total(best))
     return dict(packages=packages, plans=plans, best=best, spread=spread, forwarder=base['forwarder'])
 
 

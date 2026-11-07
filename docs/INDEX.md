@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [核算问题复盘、同类订单检查与拆分边界修复](../MAINTENANCE-20261107-CALCULATION-AUDIT.md)
 - [拆发按各包档位计算平台费用](../MAINTENANCE-20261107-PARCEL-RATES.md)
 - [微信推送 00:00–07:00 静默与早间订单汇总](../MAINTENANCE-20261107-PUSH-QUIET-HOURS.md)
 - [回刷历史自动沿用重量](../MAINTENANCE-20261106-WEIGHT-REFRESH.md)

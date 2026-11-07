@@ -296,6 +296,20 @@ class ProfitTest(unittest.TestCase):
         self.assertEqual(after['summary']['units'],2)
         self.assertEqual(after['summary']['packages'],2)
 
+    def test_dispatch_recommendation_includes_platform_fees(self):
+        self.post.update(posting_number='RECOMMEND-1',order_number='RECOMMEND')
+        self.post['products'][0].update(quantity=2,weight=1.001,price={'amount':'135','currency':'CNY'})
+        with p.connection(self.path) as db:
+            p.capture_postings(db,self.shop,'fbs',[self.post],time.time())
+        app=create_app({'database':str(self.path),'secret_key':'test-key','secure_cookie':False,'public_access':True})
+        order=app.test_client().get('/ozon-profit/api/orders/2').json['order']
+        comparison=order['parcel_comparison']
+        self.assertEqual([plan['cost'] for plan in comparison['plans']],['69.65','81.33'])
+        self.assertEqual([plan['platform_fee'] for plan in comparison['plans']],['51.30','37.80'])
+        self.assertEqual([plan['total_cost'] for plan in comparison['plans']],['120.95','119.13'])
+        self.assertEqual(comparison['best'],1)
+        self.assertEqual(comparison['spread'],'1.82')
+
     def test_split_three_uses_each_parcel_rate_and_keeps_explicit_override(self):
         self.post.update(posting_number='RATE-1',order_number='RATE')
         self.post['products'][0].update(quantity=3,weight=.264,price={'amount':'83','currency':'CNY'})

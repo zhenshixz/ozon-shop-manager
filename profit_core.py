@@ -220,7 +220,11 @@ def clear_incompatible_inherited_weights(db, now, shop=None):
             SELECT 1 FROM profit_orders src
             JOIN profit_lines sl ON sl.order_id=src.id
             JOIN profit_lines l ON l.order_id=o.id
+            JOIN profit_inputs si ON si.order_id=src.id
+            LEFT JOIN profit_weight_sources sw ON sw.order_id=src.id
             WHERE src.id=w.source_order_id AND src.shop=o.shop
+            AND CAST(si.weight_override AS REAL)>0
+            AND COALESCE(sw.origin,'manual')='manual'
             AND l.quantity=sl.quantity
             AND ((l.offer_id!='' AND l.offer_id=sl.offer_id)
                  OR (l.offer_id='' AND l.sku!='' AND l.sku=sl.sku))
@@ -235,7 +239,13 @@ def clear_incompatible_inherited_weights(db, now, shop=None):
         db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,NULL,?,?)',
                    (row['order_id'],row['weight_override'],now,audit))
         db.execute('UPDATE profit_inputs SET weight_override=NULL WHERE order_id=?',(row['order_id'],))
-        db.execute('DELETE FROM profit_weight_sources WHERE order_id=?',(row['order_id'],))
+        invalid_source=db.execute('SELECT origin FROM profit_weight_sources WHERE order_id=?',
+                                  (row['source_order_id'],)).fetchone()
+        if invalid_source and invalid_source['origin']=='shape_changed':
+            db.execute("UPDATE profit_weight_sources SET origin='shape_changed',recorded_at=?,source_weight_g=NULL WHERE order_id=?",
+                       (now,row['order_id']))
+        else:
+            db.execute('DELETE FROM profit_weight_sources WHERE order_id=?',(row['order_id'],))
 
 
 def inherit_measured_weights(db, now=None, shop=None):
@@ -282,8 +292,91 @@ def inherit_measured_weights(db, now=None, shop=None):
     return filled
 
 
+def posting_shape(posting):
+    """Accept a complete, unambiguous product array for shape reconciliation."""
+    products=posting.get('products')
+    if not isinstance(products,list) or not products: return None
+    shape={}
+    for item in products:
+        if not isinstance(item,dict): return None
+        key=str(item.get('offer_id') or item.get('sku') or item.get('product_id') or '')
+        quantity=item.get('quantity')
+        if not key or key in shape or type(quantity) is not int or not 1<=quantity<=100000:
+            return None
+        shape[key]=quantity
+    return shape
+
+
+def posting_shape_snapshots(db, shop, source, postings):
+    """Snapshot inputs before API quantity updates, and prove new split groups."""
+    snapshots={};incoming={}
+    for posting in postings:
+        number=str(posting.get('posting_number') or '')
+        if not number: continue
+        if number in incoming:
+            incoming[number]=None
+            continue
+        incoming[number]=posting
+        shape=posting_shape(posting)
+        if shape is None: continue
+        old=db.execute('SELECT * FROM profit_orders WHERE shop=? AND posting=?',
+                       (shop,number)).fetchone()
+        if old:
+            lines=[dict(row) for row in db.execute('SELECT * FROM profit_lines WHERE order_id=?',(old['id'],))]
+            inputs=db.execute('''SELECT i.*,ws.origin FROM profit_inputs i
+                LEFT JOIN profit_weight_sources ws ON ws.order_id=i.order_id WHERE i.order_id=?''',(old['id'],)).fetchone()
+            snapshots[number]=dict(order=dict(old),lines=lines,inputs=dict(inputs) if inputs else None,
+                                   old_shape={line['line_key']:line['quantity'] for line in lines},new_shape=shape)
+    safe_parents=set()
+    if source=='fbs':
+        for number,snapshot in snapshots.items():
+            parent=incoming.get(number)
+            if not parent or str(parent.get('order_number') or '')!=snapshot['order']['order_number']: continue
+            group=[parent]+[p for p in incoming.values() if p and p.get('parent_posting_number')==number]
+            if len(group)<2 or db.execute('''SELECT 1 FROM profit_orders WHERE shop=? AND order_number=?
+                AND id<>? AND lower(status) NOT IN ('cancelled','canceled','returned') LIMIT 1''',
+                (shop,snapshot['order']['order_number'],snapshot['order']['id'])).fetchone(): continue
+            combined={};valid=True
+            for item in group:
+                shape=posting_shape(item)
+                if shape is None or str(item.get('order_number') or '')!=snapshot['order']['order_number'] or str(item.get('status','')).lower() in EXCLUDED_PROFIT_STATUSES:
+                    valid=False;break
+                for key,quantity in shape.items(): combined[key]=combined.get(key,0)+quantity
+            if valid and combined==snapshot['old_shape']: safe_parents.add(number)
+    return snapshots,safe_parents
+
+
+def reconcile_posting_shapes(db, snapshots, safe_parents, handed_off, now):
+    for number,snapshot in snapshots.items():
+        old_shape,new_shape=snapshot['old_shape'],snapshot['new_shape']
+        if old_shape==new_shape: continue
+        oid=snapshot['order']['id']
+        removed=[]
+        if number in safe_parents:
+            for line in snapshot['lines']:
+                if line['line_key'] in new_shape: continue
+                row=db.execute('SELECT * FROM profit_purchase_sources WHERE line_id=?',(line['id'],)).fetchone()
+                removed.append(dict(line=line,purchase_source=dict(row) if row else None))
+                db.execute('DELETE FROM profit_purchase_sources WHERE line_id=?',(line['id'],))
+                db.execute('DELETE FROM profit_lines WHERE id=? AND order_id=?',(line['id'],oid))
+        original=snapshot['inputs']
+        invalid_weight=original and original['weight_override'] is not None and oid not in handed_off
+        if removed or invalid_weight:
+            audit=json.dumps(dict(channel='posting-shape-change',old_shape=old_shape,new_shape=new_shape,
+                                  removed_lines=removed,previous_inputs=original),ensure_ascii=False)
+            db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,?,?,?)',
+                       (oid,original['weight_override'] if original else None,
+                        None if invalid_weight else (original['weight_override'] if original else None),now,audit))
+        if invalid_weight:
+            db.execute('UPDATE profit_inputs SET weight_override=NULL WHERE order_id=?',(oid,))
+            db.execute("INSERT OR REPLACE INTO profit_weight_sources VALUES (?,'shape_changed',NULL,?,NULL)",(oid,now))
+
+
 def capture_postings(db, shop, source, postings, now):
     """Capture all postings, independent of the once-per-order notification dedup."""
+    postings=list(postings)
+    snapshots,safe_parents=posting_shape_snapshots(db,shop['id'],source,postings)
+    pending={row['order_id'] for row in db.execute('SELECT order_id FROM profit_dispatch_plans WHERE applied=0')}
     for posting in postings:
         pnum = str(posting.get('posting_number') or '')
         if not pnum: continue
@@ -296,7 +389,7 @@ def capture_postings(db, shop, source, postings, now):
             (shop['id'],shop['name'],pnum,str(posting.get('order_number') or posting.get('order_id') or pnum),
              source,str(posting.get('status') or ''),created,now))
         order_id = db.execute('SELECT id FROM profit_orders WHERE shop=? AND posting=?',(shop['id'],pnum)).fetchone()[0]
-        for item in posting.get('products',[]) or []:
+        for item in posting['products'] if posting_shape(posting) is not None else []:
             key = str(item.get('offer_id') or item.get('sku') or item.get('product_id') or '')
             if not key: continue
             price = item.get('price')
@@ -333,6 +426,11 @@ def capture_postings(db, shop, source, postings, now):
     if source == 'fbs':
         from parcel_comparison import apply_to_synced_packages
         apply_to_synced_packages(db,shop['id'],postings,now)
+    handed_off=set()
+    for oid in pending:
+        row=db.execute('SELECT data FROM profit_dispatch_plans WHERE order_id=? AND applied=1',(oid,)).fetchone()
+        if row: handed_off.update(item['order_id'] for item in json.loads(row['data']).get('adopted_from',[]))
+    reconcile_posting_shapes(db,snapshots,safe_parents,handed_off,now)
     inherit_purchase_prices(db,now,shop['id'])
     inherit_measured_weights(db,now,shop['id'])
 
@@ -347,6 +445,8 @@ def calculate(order):
     lines = order['lines']
     inputs = order.get('inputs') or {}
     issues = []
+    if inputs.get('weight_origin')=='shape_changed' and not order.get('dispatch_plan'):
+        issues.append('商品件数或组成已变化，请重新核实包裹重量并保存')
     if not lines: issues.append('商品明细尚未同步')
     revenue = D(0)
     purchase = D(0)
@@ -514,19 +614,24 @@ def apply_inputs(order, payload, require_confirmation=True):
                 raise ValueError('API商品重量已变化，请刷新后重新核实计费重量')
             if require_confirmation and payload.get('weight_confirmed') is not True:
                 raise ValueError('请核实并勾选确认使用自定义计费重量')
+    if prior_inputs.get('weight_origin')=='shape_changed' and mode in ('api','custom'):
+        clean.update(weight_origin='manual',weight_source_order_id=None,inherited_weight_g=None,weight_source_posting='')
     order['inputs'] = clean
     order['calculation'] = calculate(order)
     return order
 
 def save_order(db, order, now=None, source='web-save'):
     now = time.time() if now is None else now
-    prior = db.execute('SELECT weight_override FROM profit_inputs WHERE order_id=?',(order['id'],)).fetchone()
+    prior = db.execute('''SELECT i.weight_override,ws.origin FROM profit_inputs i
+        LEFT JOIN profit_weight_sources ws ON ws.order_id=i.order_id WHERE i.order_id=?''',(order['id'],)).fetchone()
     old_weight = prior[0] if prior else None
     new_weight = order['inputs'].get('weight_override')
-    if old_weight != new_weight:
+    confirmed_shape = prior and prior['origin']=='shape_changed' and order['inputs'].get('weight_origin')=='manual'
+    if old_weight != new_weight or confirmed_shape:
         db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,?,?,?)',
                    (order['id'],old_weight,new_weight,now,source))
-    if number(old_weight,'原计费重量',maximum='1000000',allow_blank=True) != number(new_weight,'计费重量',maximum='1000000',allow_blank=True):
+    if (number(old_weight,'原计费重量',maximum='1000000',allow_blank=True) != number(new_weight,'计费重量',maximum='1000000',allow_blank=True)
+            or confirmed_shape):
         db.execute('''INSERT INTO profit_weight_sources VALUES (?,'manual',NULL,?,NULL)
             ON CONFLICT(order_id) DO UPDATE SET origin='manual',source_order_id=NULL,
             recorded_at=excluded.recorded_at,source_weight_g=NULL''',(order['id'],now))

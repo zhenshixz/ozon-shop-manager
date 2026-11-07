@@ -1,5 +1,6 @@
 import copy
 import datetime as dt
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -183,6 +184,109 @@ class ProfitSyncTest(unittest.TestCase):
         client.post(prefix+'/login',json={'token':'test'})
         self.assertEqual(len(client.get(prefix+'/bootstrap').json['shops']),2)
         self.assertEqual(client.get(prefix+'/statistics?shop=s2').json['statistics']['total_orders'],0)
+
+    def test_conserved_explicit_split_archives_removed_parent_lines(self):
+        original=self.posting()
+        second=dict(original['products'][0],offer_id='other',sku=456)
+        original['products'].append(second)
+        self.capture(original)
+        parent=dict(original,products=original['products'][:1])
+        child=dict(original,posting_number='A-2',parent_posting_number='A-1',products=[second])
+        with self.store.connection() as db:
+            db.execute("UPDATE profit_lines SET purchase_unit='12'")
+            core.capture_postings(db,self.shop,'fbs',[parent,child],self.now)
+            rows=db.execute('SELECT o.posting,l.line_key FROM profit_orders o JOIN profit_lines l ON l.order_id=o.id ORDER BY o.id').fetchall()
+            self.assertEqual([(r['posting'],r['line_key']) for r in rows],[('A-1','hat'),('A-2','other')])
+            archive=json.loads(db.execute('SELECT source FROM profit_weight_audit WHERE order_id=1').fetchone()[0])
+            self.assertEqual(archive['removed_lines'][0]['line']['purchase_unit'],'12')
+            self.assertEqual(archive['removed_lines'][0]['line']['line_key'],'other')
+            core.capture_postings(db,self.shop,'fbs',[parent,child],self.now+1)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM profit_weight_audit').fetchone()[0],1)
+
+    def test_partial_or_nonconserved_groups_do_not_remove_parent_lines(self):
+        original=self.posting()
+        second=dict(original['products'][0],offer_id='other',sku=456)
+        original['products'].append(second)
+        self.capture(original)
+        parent=dict(original,products=original['products'][:1])
+        with self.store.connection() as db:
+            core.capture_postings(db,self.shop,'fbs',[parent],self.now)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM profit_lines WHERE order_id=1').fetchone()[0],2)
+            child=dict(original,posting_number='A-2',parent_posting_number='A-1',products=[dict(second,quantity=2)])
+            core.capture_postings(db,self.shop,'fbs',[parent,child],self.now+1)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM profit_lines WHERE order_id=1').fetchone()[0],2)
+
+    def test_changed_quantity_invalidates_whole_measurement_and_dependents(self):
+        original=self.posting();original['products'][0]['quantity']=2
+        self.capture(original)
+        other=copy.deepcopy(original);other.update(posting_number='B-1',order_number='B')
+        self.capture(other)
+        with self.store.connection() as db:
+            order=core.load_order(db,1);order['inputs']['weight_override']='624'
+            order['lines'][0]['purchase_unit']='12';core.save_order(db,order,self.now)
+            self.assertEqual(core.load_order(db,2)['inputs']['weight_override'],'624')
+            parent=copy.deepcopy(original);parent['products'][0]['quantity']=1
+            child=dict(parent,posting_number='A-2',parent_posting_number='A-1')
+            core.capture_postings(db,self.shop,'fbs',[parent,child],self.now+1)
+            parent_order=core.load_order(db,1);dependent=core.load_order(db,2);child_order=core.load_order(db,3)
+            self.assertIsNone(parent_order['inputs']['weight_override'])
+            self.assertEqual(parent_order['inputs']['weight_origin'],'shape_changed')
+            self.assertIsNone(parent_order['calculation']['profit'])
+            self.assertEqual(dependent['inputs']['weight_origin'],'shape_changed')
+            self.assertIsNone(dependent['inputs']['weight_override'])
+            self.assertIsNone(child_order['inputs']['weight_override'])
+            self.assertIsNone(core.latest_measured_weight(db,'s1',1,'hat','123'))
+            cost_only={'lines':[{'id':parent_order['lines'][0]['id'],'purchase_unit':'13'}],'inputs':{}}
+            unchanged=core.apply_inputs(parent_order,cost_only)
+            core.save_order(db,unchanged,self.now+2)
+            self.assertEqual(core.load_order(db,1)['inputs']['weight_origin'],'shape_changed')
+            confirmed=core.apply_inputs(core.load_order(db,1),dict(cost_only,weight_mode='api'))
+            core.save_order(db,confirmed,self.now+3)
+            self.assertEqual(core.load_order(db,1)['inputs']['weight_origin'],'manual')
+            self.assertEqual(core.load_order(db,1)['calculation']['status'],'ready')
+
+    def test_incomplete_invalid_product_arrays_preserve_measured_package(self):
+        original=self.posting();self.capture(original)
+        with self.store.connection() as db:
+            order=core.load_order(db,1);order['inputs']['weight_override']='312'
+            order['lines'][0]['purchase_unit']='12';core.save_order(db,order,self.now)
+            bad_arrays=[None,[],[original['products'][0],original['products'][0]],
+                        [dict(original['products'][0],quantity=0)],
+                        [dict(original['products'][0],quantity=2),{}]]
+            for index,products in enumerate(bad_arrays):
+                core.capture_postings(db,self.shop,'fbs',[dict(original,products=products)],self.now+index+1)
+                current=core.load_order(db,1)
+                self.assertEqual(current['lines'][0]['quantity'],1)
+                self.assertEqual(current['inputs']['weight_override'],'312')
+                self.assertEqual(current['inputs']['weight_origin'],'manual')
+
+    def test_valid_saved_split_can_replace_changed_whole_weight_requirement(self):
+        original=self.posting();self.capture(original)
+        with self.store.connection() as db:
+            order=core.load_order(db,1)
+        order['lines'][0]['quantity']=2;order['lines'][0]['purchase_unit']='12'
+        order['inputs'].update(weight_origin='shape_changed',weight_override=None)
+        self.assertIsNone(core.calculate(order)['profit'])
+        order['dispatch_plan']={'packages':[{'shape':[['hat',1]],'weight':'312'}]*2}
+        self.assertEqual(core.calculate(order)['status'],'ready')
+
+    def test_exact_saved_split_handoff_keeps_confirmed_package_weights(self):
+        import parcel_comparison
+        original=self.posting();original['products'][0]['quantity']=2;self.capture(original)
+        with self.store.connection() as db:
+            order=core.load_order(db,1);order['inputs']['weight_override']='624'
+            order['lines'][0]['purchase_unit']='12';core.save_order(db,order,self.now)
+            order=core.load_order(db,1)
+            order['dispatch_plan']=parcel_comparison.select(db,order,1,{'one':'312'},False)
+            order['calculation']=core.calculate(order);parcel_comparison.save(db,order)
+            parent=copy.deepcopy(original);parent['products'][0]['quantity']=1
+            child=dict(parent,posting_number='A-2',parent_posting_number='A-1')
+            core.capture_postings(db,self.shop,'fbs',[parent,child],self.now+1)
+            for oid in (1,2):
+                current=core.load_order(db,oid)
+                self.assertEqual(current['inputs']['weight_override'],'312')
+                self.assertEqual(current['inputs']['weight_origin'],'dispatch')
+                self.assertEqual(current['calculation']['status'],'ready')
 
 
 if __name__=='__main__':unittest.main()

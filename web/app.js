@@ -461,7 +461,7 @@ function showParcelComparison(data,reset=false,pending=false){
       const p=packages[key];
       return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克${p.source==='API 估重'?'（估）':''} · ${esc(p.tier)} · 扣费 ${esc(p.rate)}%`;
     }).join('<br>');
-    return `<label class="parcel-plan${index===dispatchChoice?' is-selected':''}"><input type="radio" name="dispatch-choice" value="${index}" ${index===dispatchChoice?'checked':''}><span class="parcel-plan-body"><b>${esc(plan.label)}</b><small>${breakdown}</small></span><strong>${money(plan.cost)}</strong></label>`;
+    return `<label class="parcel-plan${index===dispatchChoice?' is-selected':''}"><input type="radio" name="dispatch-choice" value="${index}" ${index===dispatchChoice?'checked':''}><span class="parcel-plan-body"><b>${esc(plan.label)}</b><small>${breakdown}</small></span><strong>${money(plan.total_cost)}</strong></label>`;
   }).join('');
   if(restoreFocus)$('parcel-plans').querySelector(':checked')?.focus();
   const fields=$('parcel-weights');
