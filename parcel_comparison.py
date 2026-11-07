@@ -26,18 +26,27 @@ def saved_plan(db, order):
     return None
 
 
-def split_shipping(lines, plan, forwarding):
+def split_charges(lines, plan, forwarding, rate_override=None):
     by_key = {line['line_key']:line for line in lines}
     total = core.D(0)
     line_logistics = defaultdict(core.D)
+    line_fees = defaultdict(core.D)
+    fees = core.D(0)
+    rates = []
     for parcel in plan['packages']:
         items = [dict(by_key[key],quantity=qty) for key,qty in parcel['shape']]
-        quote = core.calculate(dict(lines=items,inputs={'weight_override':parcel['weight']}))
+        quote = core.calculate(dict(lines=items,inputs={'weight_override':parcel['weight'],'rate':rate_override}))
         shipping = core.D(quote['shipping_exact'])
+        fee = core.D(quote['platform_fee_exact'])
         total += shipping
+        fees += fee
+        rates.append(quote['rate'])
         # In this version each split parcel contains only one SKU.
         line_logistics[items[0]['line_key']] += shipping + forwarding
-    return total,{key:str(value) for key,value in line_logistics.items()}
+        line_fees[items[0]['line_key']] += fee
+    return dict(shipping=total,fees=fees,rates=rates,
+                logistics={key:str(value) for key,value in line_logistics.items()},
+                line_fees={key:str(value) for key,value in line_fees.items()})
 
 
 def compare(db, order, trial_weights=None):
@@ -69,7 +78,7 @@ def compare(db, order, trial_weights=None):
             error = '请补充有效的整包重量（不超过 25 千克）'
         quote = core.calculate(dict(lines=items, inputs=dict(
             weight_override=None if error else weight,
-            template=template, forwarder=forwarding)))
+            template=template, forwarder=forwarding,rate=inputs.get('rate'))))
         if '请补充人民币核算售价' in quote['issues']:
             error = '请先补充人民币核算售价'
         if not error:
@@ -77,7 +86,7 @@ def compare(db, order, trial_weights=None):
         packages[key] = dict(label=label, weight=None if weight is None else str(weight),
                              default_weight=None if default_weight is None else str(default_weight),
                              source=source, error=error, revenue=None if error else quote['revenue'],
-                             tier=None if error else quote['template']['name'],shape=composition(items),
+                             tier=None if error else quote['template']['name'],rate=quote['rate'],shape=composition(items),
                              reference_posting=reference_posting)
 
     if base['weight_source'] == 'custom':
@@ -180,7 +189,7 @@ def save(db, order):
     stored = db.execute('SELECT line_key,quantity FROM profit_lines WHERE order_id=?',(order['id'],)).fetchall()
     if composition(stored) != shape or has_sibling(db,order):
         raise ValueError('发货单已拆分或件数已变化，请重新打开核算')
-    data = dict(plan=plan,shape=shape,rate=order['calculation']['rate'],
+    data = dict(plan=plan,shape=shape,rate=order['calculation']['rate'],rate_override=order['inputs'].get('rate'),
                 forwarding=order['inputs']['forwarder'],
                 prices={line['line_key']:[line['purchase_unit'],line['price_override'],line['id']] for line in order['lines']})
     db.execute('''INSERT INTO profit_dispatch_plans(order_id,data,updated) VALUES (?,?,?)
@@ -208,6 +217,8 @@ def apply_to_synced_packages(db, shop, postings, now):
         if not any(p.get('parent_posting_number') == record['posting'] for p in group.values()):
             continue
         data = json.loads(record['data'])
+        original_inputs = db.execute('SELECT rate FROM profit_inputs WHERE order_id=?',(record['order_id'],)).fetchone()
+        rate_override = data.get('rate_override',original_inputs['rate'] if original_inputs else None)
         shapes = {}
         for number, posting in group.items():
             shape = []
@@ -265,7 +276,7 @@ def apply_to_synced_packages(db, shop, postings, now):
             db.execute('''INSERT INTO profit_inputs(order_id,weight_override,template,rate,forwarder,other_cost,updated)
                 VALUES (?,?,'auto',?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET weight_override=excluded.weight_override,
                 template=excluded.template,rate=excluded.rate,forwarder=excluded.forwarder,updated=excluded.updated''',
-                (oid,weight,data['rate'],data['forwarding'],'0',now))
+                (oid,weight,rate_override,data['forwarding'],'0',now))
             db.execute("INSERT OR REPLACE INTO profit_weight_sources VALUES (?,'dispatch',?,?,?)",
                        (oid,record['order_id'],now,weight))
         data['adopted_from'] = previous

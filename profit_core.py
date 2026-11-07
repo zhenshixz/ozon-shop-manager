@@ -380,37 +380,49 @@ def calculate(order):
         tid = recommend_template(revenue,weight) or ('xs' if revenue <= 135 else 'small')
     if tid not in TEMPLATE_MAP: raise ValueError('请选择有效的运费档位')
     template = TEMPLATE_MAP[tid]
-    rate = number(inputs.get('rate'),'合计扣费率',maximum='99.99',allow_blank=True)
+    rate_override = number(inputs.get('rate'),'合计扣费率',maximum='99.99',allow_blank=True)
+    rate = rate_override
     if rate is None: rate = D(template['rate'])
     forwarder = number(inputs.get('forwarder','2'),'货代费')
     other = number(inputs.get('other_cost','0'),'其他成本')
     shipping = D(template['fix']) + D(template['per_g'])*weight if weight is not None else None
     packages = 1
     line_logistics = {}
+    line_platform_fees = {}
+    fee = revenue*rate/100
     if plan:
-        from parcel_comparison import split_shipping
-        shipping,line_logistics = split_shipping(lines,plan,forwarder)
+        from parcel_comparison import split_charges
+        charges = split_charges(lines,plan,forwarder,rate_override)
+        shipping = charges['shipping']
+        fee = charges['fees']
+        line_logistics = charges['logistics']
+        line_platform_fees = charges['line_fees']
+        if len(set(charges['rates'])) == 1:
+            rate = D(charges['rates'][0])
+        elif revenue:
+            rate = (fee/revenue*100).quantize(D('.01'),rounding=ROUND_HALF_UP)
         packages = len(plan['packages'])
         forwarder *= packages
-    fee = revenue*rate/100
     profit = None if issues else revenue-purchase-shipping-fee-forwarder-other
     warnings = []
     included = str(order.get('status','')).lower() not in EXCLUDED_PROFIT_STATUSES
     if not included: warnings.append('此包裹已取消或退货，预估金额不计入利润合计；实际损益需另行核对')
     if plan:
-        warnings.append(f'按已选方案分 {packages} 包计费，平台扣费按本单费率估算')
+        fee_note = '按各包档位扣费' if rate_override is None else '按手填费率扣费'
+        warnings.append(f'按已选方案分 {packages} 包计费，{fee_note}')
     elif sum(line['quantity'] for line in lines) > 1 and custom_weight is None:
         warnings.append('多件合发按一包计费，当前为商品重量合计，请按实际整包计费重量核对')
     if inputs.get('template','auto') != 'auto': warnings.append('正在使用手动选择的运费档位')
     return dict(status='ready' if profit is not None else 'incomplete',included_in_summary=included,issues=list(dict.fromkeys(issues)),
                 warnings=warnings,template=template,rate=str(rate),packages=packages,line_logistics=line_logistics,
+                line_platform_fees=line_platform_fees,
                 weight_g=str(weight) if weight is not None else None,
                 api_weight_g=str(api_weight) if weight_complete else None,
                 weight_source='custom' if custom_weight is not None else ('api' if weight_complete else 'missing'),
                 custom_weight_g=str(custom_weight) if custom_weight is not None else None,revenue=money(revenue),
                 purchase_cost=money(purchase) if not any(l.get('purchase_unit') is None for l in lines) and lines else None,
                 shipping=money(shipping),shipping_exact=str(shipping) if shipping is not None else None,
-                platform_fee=money(fee),forwarder=money(forwarder),other_cost=money(other),
+                platform_fee=money(fee),platform_fee_exact=str(fee),forwarder=money(forwarder),other_cost=money(other),
                 profit=money(profit),profit_exact=str(profit) if profit is not None else None,
                 sales_margin=str((profit/revenue*100).quantize(D('.01'),rounding=ROUND_HALF_UP)) if profit is not None and revenue else None,
                 cost_margin=str((profit/purchase*100).quantize(D('.01'),rounding=ROUND_HALF_UP)) if profit is not None and purchase else None)

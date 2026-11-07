@@ -416,10 +416,11 @@ function showCalculation(c){
   }
   $('profit').textContent=money(c.profit);$('profit').classList.toggle('negative',Number(c.profit)<0);
   $('margin').textContent=c.sales_margin==null?'待补齐资料':`销售利润率 ${c.sales_margin}%`;
-  if(!$('rate').value)$('rate').placeholder=`当前档位默认 ${c.rate}%`;
+  if(!$('rate').value)$('rate').placeholder=c.packages>1?`按各包档位自动计算 · 综合 ${c.rate}%`:`当前档位默认 ${c.rate}%`;
   $('profit-title').textContent=c.packages>1?'整单预估利润':'本包裹预估利润';
   const freightLabel=c.packages>1?`运费 · ${c.packages} 包合计`:c.weight_g==null||Number(c.weight_g)<=0?'运费 · 待补计费重量':Number(c.weight_g)>25000?'运费 · 超出25千克范围':`运费 · ${$('template').value==='auto'?'自动匹配 · ':''}${c.template.name} / ${Number(c.weight_g)}克`;
-  const values=[['核算售价合计',c.revenue],['采购成本合计',c.purchase_cost],[freightLabel,c.shipping],[`平台合计扣费 · ${c.rate}%`,c.platform_fee],[c.packages>1?`货代费 · ${c.packages} 包合计`:'货代费',c.forwarder],['其他成本',c.other_cost]];
+  const feeLabel=c.packages>1&&!$('rate').value?`平台合计扣费 · 分包综合 ${c.rate}%`:`平台合计扣费 · ${c.rate}%`;
+  const values=[['核算售价合计',c.revenue],['采购成本合计',c.purchase_cost],[freightLabel,c.shipping],[feeLabel,c.platform_fee],[c.packages>1?`货代费 · ${c.packages} 包合计`:'货代费',c.forwarder],['其他成本',c.other_cost]];
   $('breakdown').innerHTML=values.map(([label,value])=>`<div class="break-row"><span>${esc(label)}</span><b>${money(value)}</b></div>`).join('');
   $('calc-note').textContent=[...c.issues,...c.warnings,c.profit_exact!=null?`未取整利润 ${c.profit_exact} 元；运费未取整 ${c.shipping_exact} 元。`:''].filter(Boolean).join('；');
 }
@@ -458,7 +459,7 @@ function showParcelComparison(data,reset=false,pending=false){
   $('parcel-plans').innerHTML=plans.map((plan,index)=>{
     const breakdown=plan.parts.map(({key,count})=>{
       const p=packages[key];
-      return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克${p.source==='API 估重'?'（估）':''} · ${esc(p.tier)}`;
+      return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克${p.source==='API 估重'?'（估）':''} · ${esc(p.tier)} · 扣费 ${esc(p.rate)}%`;
     }).join('<br>');
     return `<label class="parcel-plan${index===dispatchChoice?' is-selected':''}"><input type="radio" name="dispatch-choice" value="${index}" ${index===dispatchChoice?'checked':''}><span class="parcel-plan-body"><b>${esc(plan.label)}</b><small>${breakdown}</small></span><strong>${money(plan.cost)}</strong></label>`;
   }).join('');

@@ -40,7 +40,9 @@ def build(db,shop='',date_from='',date_to='',search='',started='2026-10-24',shop
             eligible_ready+=1;package_profit=D(c['profit']);profit+=package_profit;ready_sales+=sales;daily['profit']+=package_profit
         line_sales=[D(l['price_override'] if l.get('price_override') is not None else (l['unit_price'] if l.get('currency')=='CNY' and l.get('unit_price') is not None else '0'))*l['quantity'] for l in o['lines']]
         costs=[D(l.get('purchase_unit') or '0')*l['quantity'] for l in o['lines']]
-        logistics=c['line_logistics']
+        logistics={key:D(value) for key,value in c['line_logistics'].items()}
+        for key,value in c['line_platform_fees'].items():
+            logistics[key]=logistics.get(key,D(0))+D(value)
         shared=sum(line_sales)-sum(costs)-D(c['profit'])-sum(map(D,logistics.values())) if complete else D(0)
         allocated=D(0);quantity=sum(l['quantity'] for l in o['lines'])
         for index,l in enumerate(o['lines']):

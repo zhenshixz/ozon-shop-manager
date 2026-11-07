@@ -296,6 +296,39 @@ class ProfitTest(unittest.TestCase):
         self.assertEqual(after['summary']['units'],2)
         self.assertEqual(after['summary']['packages'],2)
 
+    def test_split_three_uses_each_parcel_rate_and_keeps_explicit_override(self):
+        self.post.update(posting_number='RATE-1',order_number='RATE')
+        self.post['products'][0].update(quantity=3,weight=.264,price={'amount':'83','currency':'CNY'})
+        with p.connection(self.path) as db:
+            p.capture_postings(db,self.shop,'fbs',[self.post],time.time())
+        app=create_app({'database':str(self.path),'secret_key':'test-key','secure_cookie':False,'public_access':True})
+        client=app.test_client();prefix='/ozon-profit/api';path=prefix+'/orders/2'
+        headers={'X-CSRF-Token':client.get(prefix+'/bootstrap').json['csrf']}
+        order=client.get(path).json['order']
+        self.assertEqual(order['calculation']['rate'],'17')
+        body={'lines':[{'id':order['lines'][0]['id'],'purchase_unit':'60.5'}],
+              'inputs':{},'dispatch_choice':2,'parcel_weights':{'one':'264'}}
+        preview=client.post(path+'/preview',json=body,headers=headers).json['order']
+        calc=preview['calculation']
+        self.assertEqual(calc['platform_fee'],'34.86')
+        self.assertEqual(calc['shipping'],'28.26')
+        self.assertEqual(calc['forwarder'],'6.00')
+        self.assertEqual(calc['rate'],'14')
+        self.assertEqual(calc['profit'],'-1.62')
+        self.assertEqual(p.D(calc['profit_exact']),p.D('-.5408')*3)
+        self.assertEqual(preview['parcel_comparison']['packages']['one']['rate'],'14')
+        manual=client.post(path+'/preview',json=dict(body,inputs={'rate':'17'}),headers=headers).json['order']
+        self.assertEqual(manual['calculation']['platform_fee'],'42.33')
+        self.assertEqual(manual['calculation']['profit'],'-9.09')
+        mixed=client.post(path+'/preview',json=dict(body,dispatch_choice=1,parcel_weights={'one':'264','two':'528'}),headers=headers).json['order']
+        self.assertEqual(mixed['calculation']['platform_fee'],'39.84')
+        self.assertEqual(mixed['calculation']['rate'],'16.00')
+        self.assertEqual(client.post(path,json=body,headers=headers).status_code,200)
+        self.assertEqual(client.get(path).json['order']['calculation']['profit'],'-1.62')
+        compass=client.get(prefix+'/analytics?q=RATE').json
+        self.assertEqual(compass['summary']['profit'],'-1.62')
+        self.assertEqual(compass['products'][0]['profit'],'-1.62')
+
     def test_auth_csrf_preview_save_and_persistence(self):
         app=create_app({'database':str(self.path),'access_token':'test-token','secret_key':'test-key','secure_cookie':False});app.testing=True
         client=app.test_client();prefix='/ozon-profit/api'
