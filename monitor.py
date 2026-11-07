@@ -120,8 +120,9 @@ def load_config(filename):
             raise MonitorError(f"pushplus.{key} 必须为字符串")
     push.setdefault("min_send_interval_seconds", 13)
     push.setdefault("daily_request_budget", 180)
+    push.setdefault("quiet_end_hour", 7)
     for key, low, high in (("min_send_interval_seconds", 3, 600),
-                          ("daily_request_budget", 1, 1900)):
+                          ("daily_request_budget", 1, 1900), ("quiet_end_hour", 0, 23)):
         if type(push[key]) is not int or not low <= push[key] <= high:
             raise MonitorError(f"pushplus.{key} 必须为 {low}–{high} 的整数")
     shops = cfg.get("shops")
@@ -448,15 +449,38 @@ class Store:
         self.initialize_schedule(now, cfg.get("product_digest_hour", 22))
         interval = cfg.get("order_push_seconds", 600)
         boundary = int(now // interval) * interval
+        local = dt.datetime.fromtimestamp(now, CHINA)
+        quiet_end = cfg.get('quiet_end_hour', 0)
+        wake = int(local.replace(hour=quiet_end,minute=0,second=0,microsecond=0).timestamp())
+        if quiet_end:
+            boundary = max(boundary,wake)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            if self.get(db, "orders:last-boundary") != str(boundary):
+            previous = int(self.get(db, "orders:last-boundary", "0"))
+            if local.hour >= quiet_end and previous < boundary:
+                first_morning = quiet_end and previous < wake
+                if first_morning and now < wake + cfg.get('poll_seconds', 300) + 60:
+                    checked = {(row['shop'],row['source']) for row in db.execute(
+                        "SELECT shop,source FROM health WHERE source IN ('fbs','fbo') AND last_success>=?",(wake,))}
+                    if any((shop['id'],source) not in checked for shop in cfg.get('shops',[]) for source in ('fbs','fbo')):
+                        return False
                 rows = db.execute("SELECT * FROM events WHERE batch IS NULL AND kind='order' "
-                                  "AND created<=? ORDER BY id", (boundary,)).fetchall()
+                                  "AND created<=? ORDER BY id", (now if first_morning else boundary,)).fetchall()
+                morning = False
+                if first_morning:
+                    cutoff_time = stamp(wake)
+                    backlog = []
+                    for row in rows:
+                        order_time = json.loads(row['payload']).get('created_at')
+                        if row['created'] < wake or (order_time and order_time < cutoff_time):
+                            backlog.append(row)
+                    morning = bool(backlog)
+                    rows = backlog if morning else [row for row in rows if row['created'] <= boundary]
                 if rows:
                     window = f"{interval//60}分钟" if interval % 60 == 0 else f"{interval}秒"
-                    title = f"OZON｜新订单 {len(rows)} 笔｜{window}汇总"
-                    lines = [title, f"汇总时间：{display_time(boundary)}（北京时间）", ""]
+                    label = '夜间汇总' if morning else f'{window}汇总'
+                    title = f"OZON｜新订单 {len(rows)} 笔｜{label}"
+                    lines = [title, f"汇总时间：{display_time(now if morning else boundary)}（北京时间）", ""]
                     grouped = {}
                     for row in rows:
                         item = json.loads(row["payload"])
@@ -492,7 +516,7 @@ class Store:
                     lines += ["", "包含此前未发送的新增订单；同一订单不重复提醒。"]
                     if cfg.get('profit_url'):
                         lines += ["", "填写采购价／查看预估利润：", cfg['profit_url']]
-                    self.queue_message(db, title, lines, now, rows)
+                    self.queue_message(db, title, lines, now, rows, kind='order-morning' if morning else 'order')
                 self.put(db, "orders:last-boundary", boundary)
             cutoff = float(self.get(db, "digest:next-cutoff"))
             if now >= cutoff:
@@ -521,11 +545,14 @@ class Store:
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT * FROM messages WHERE state='pending' AND next_attempt<=? "
-                                  "ORDER BY CASE kind WHEN 'product-digest' THEN 0 ELSE 1 END,created LIMIT 1", (now,)).fetchone()
+                                  "ORDER BY CASE kind WHEN 'order-morning' THEN 0 WHEN 'product-digest' THEN 1 ELSE 2 END,created LIMIT 1", (now,)).fetchone()
             return dict(existing) if existing else None
 
     def reserve_send(self, cfg, now, digest=False):
-        day = dt.datetime.fromtimestamp(now, CHINA).strftime("%Y-%m-%d")
+        local = dt.datetime.fromtimestamp(now, CHINA)
+        if local.hour < cfg.get('quiet_end_hour', 0):
+            return False
+        day = local.strftime("%Y-%m-%d")
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             if now < float(self.get(db, "push:blocked-until", "0")):
@@ -655,7 +682,10 @@ class Notifier:
                 break
 
     def tick(self, now):
-        self.store.prepare_batches(now, self.cfg)
+        if dt.datetime.fromtimestamp(now, CHINA).hour < self.cfg.get('quiet_end_hour', 0):
+            return
+        if self.store.prepare_batches(now, self.cfg) is False:
+            return
         if self.store.has_work(now):
             batch = self.store.make_batch(now)
             if batch and self.store.reserve_send(self.cfg, now, digest=batch['kind'] == 'product-digest'):
@@ -773,7 +803,7 @@ def run(cfg, store, transport):
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
-    push_cfg = {**cfg["pushplus"], "order_push_seconds": cfg["order_push_seconds"],
+    push_cfg = {**cfg["pushplus"], "order_push_seconds": cfg["order_push_seconds"], "poll_seconds": cfg["poll_seconds"],
                 "product_digest_hour": cfg["product_digest_hour"],
                 "product_poll_seconds": cfg["product_poll_seconds"], "reserve_digest": True,
                 "shops": [{"id": s["id"], "name": s["name"]} for s in cfg["shops"]],

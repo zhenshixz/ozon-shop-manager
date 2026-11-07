@@ -305,6 +305,42 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 2)
         self.assertIn('新订单 1 笔｜10分钟汇总', client.calls[1][0])
 
+    def test_quiet_hours_coalesce_night_orders_before_resuming_pushes(self):
+        self.now = self.now - 12*3600
+        wake = self.now + 7*3600
+        cfg = {**PUSH,'quiet_end_hour':7,'order_push_seconds':600,'poll_seconds':300,'shops':[SHOP]}
+        client = FakePush()
+        self.store.initialize_schedule(self.now-3600)
+        with self.store.connection() as db:
+            Store.put(db,'digest:next-cutoff',self.now+22*3600)
+            self.store.queue_message(db,'Earlier digest',['Earlier digest'],self.now-60,[],kind='product-digest')
+        notifier = Notifier(self.store,client,cfg)
+        self.new_order(1,offset=2)
+        notifier.tick(self.now)
+        notifier.tick(wake-1)
+        self.assertFalse(self.store.reserve_send(cfg,wake-1))
+        self.assertEqual(client.calls,[])
+        self.assertIsNone(self.events()[0]['batch'])
+
+        notifier.tick(wake)
+        self.assertEqual(client.calls,[])
+        # The first post-07:00 poll may discover orders created before 07:00.
+        for order_id,created in ((2,wake-5),(3,wake+15)):
+            posting={'order_id':order_id,'posting_number':f'{order_id}-1','created_at':stamp(created)}
+            self.store.orders_snapshot(SHOP,'fbs',[posting],wake+30,self.now)
+        for source in ('fbs','fbo'):
+            self.store.health(SHOP['id'],source,now=wake+30)
+        notifier = Notifier(Store(self.temp.name),client,cfg)
+        notifier.tick(wake+30)
+        self.assertEqual(len(client.calls),1)
+        self.assertIn('新订单 2 笔｜夜间汇总',client.calls[0][0])
+        self.assertIn('订单 2｜',client.calls[0][1])
+        self.assertNotIn('订单 3｜',client.calls[0][1])
+        notifier.tick(wake+60)
+        notifier.tick(wake+600)
+        self.assertEqual(len(client.calls),3)
+        self.assertIn('新订单 1 笔｜10分钟汇总',client.calls[-1][0])
+
     def test_daily_digest_includes_all_shops_and_over_fifty_products_once(self):
         self.store.products_snapshot(SHOP, {}, {}, self.now)
         items = {str(i): {'offer_id': str(i)} for i in range(120)}
