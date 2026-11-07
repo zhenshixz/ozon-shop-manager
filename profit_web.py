@@ -53,6 +53,21 @@ def create_app(settings=None):
         response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         return response
 
+    import order_sync
+    manual_sync=order_sync.OrderSync(database,settings.get('monitor_config',ROOT/'config.json'))
+
+    @app.route(PREFIX+'/api/order-sync',methods=['GET','POST'])
+    def sync_orders():
+        if request.method=='GET':return jsonify(task=manual_sync.status())
+        payload=request.get_json(silent=True)
+        ids=payload.get('shops') if isinstance(payload,dict) else None
+        if not isinstance(ids,list) or not ids or len(ids)>100 or any(not isinstance(i,str) for i in ids):
+            raise ValueError('请选择需要同步的店铺')
+        with core.connection(database) as db:shops=available_shops(db)
+        selected=[s for s in shops if s['id'] in ids]
+        if set(ids)!={s['id'] for s in selected}:raise ValueError('包含未配置的店铺，请刷新后重选')
+        return jsonify(task=manual_sync.start(selected)),202
+
     @app.before_request
     def authorize():
         if not request.path.startswith(PREFIX+'/api/'): return

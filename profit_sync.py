@@ -11,14 +11,14 @@ def history_start(now):
     return (today-dt.timedelta(days=29)).timestamp()
 
 
-def refresh_orders(store, api, shop, source, now=None):
+def refresh_orders(store, api, shop, source, now=None, force=False):
     now=time.time() if now is None else now
     start=history_start(now)
     with store.connection() as db:
         state=db.execute('SELECT * FROM profit_sync_state WHERE shop=? AND source=?',
                          (shop['id'],source)).fetchone()
     # Reconcile the thirty-day window every six hours, and fill missing coverage.
-    if state is None or state['history_since']>start or now-state['history_updated']>=21600:
+    if force or state is None or state['history_since']>start or now-state['history_updated']>=21600:
         postings=api.postings(source,start,now)
         for posting in postings:
             value=posting.get('created_at') or posting.get('in_process_at')
@@ -31,6 +31,8 @@ def refresh_orders(store, api, shop, source, now=None):
                 ON CONFLICT(shop,source) DO UPDATE SET
                 history_since=MIN(profit_sync_state.history_since,excluded.history_since),
                 history_updated=excluded.history_updated''',(shop['id'],source,start,now))
+    if force:
+        return len(postings)
     # Old active orders stay in this queue regardless of their creation date.
     # Refresh terminals less often to catch late changes without wasting requests.
     with store.connection() as db:

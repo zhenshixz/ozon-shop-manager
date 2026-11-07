@@ -3,6 +3,7 @@ const $=id=>document.getElementById(id), base='/ozon-profit/api';
 let csrf='',current=null,state='',orders=[],timer=null,previewSerial=0,editRevision=0,loading=false,loadSerial=0;
 let weightMode='api',confirmedWeight='';
 let parcelWeights={},dispatchChoice=0;
+let syncingOrders=false,syncPoll=null,syncMessage='';
 let costRange={from:'',to:''},costSerial=0,costOverviewSerial=0,imagesLoading=false,costOffset=0,costDetailOrders=[];
 let titleLanguage='zh';
 try{titleLanguage=localStorage.getItem('ozon-title-language')||'zh';}catch{}
@@ -281,8 +282,8 @@ async function loadOrders(){
     $('daily-detail').textContent=`近 7 天 ${stats.total_orders} 单 · 今日 ${stats.today_orders} 单`;
     if($('mobile-statistics-note'))$('mobile-statistics-note').textContent=`已运营 ${summary.operating_days} 天 · 今日 ${stats.today_orders} 单 · 近7天 ${stats.total_orders} 单`;
     $('statistics-note').textContent=`${stats.start_date} 至 ${stats.end_date} · 北京时间 · ${stats.shop_count} 家店${stats.complete?' · 日均 = 有效订单数 ÷ 7 天':' · 历史订单补查中，完整后显示日均，避免把缺失记录当成零单'}`;
-    renderOrders();fitStats();notice('');
-  }catch(error){if(serial===loadSerial)notice(error.message);}finally{if(serial===loadSerial)$('refresh').disabled=false;}
+    renderOrders();fitStats();notice(syncMessage);
+  }catch(error){if(serial===loadSerial)notice(error.message);}finally{if(serial===loadSerial)$('refresh').disabled=syncingOrders;}
 }
 function renderOrders(){
   const cancelledOnly=$('cancelled-only')?.checked||false;
@@ -564,7 +565,45 @@ $('parcel-weights').addEventListener('keydown',event=>{
 });
 $('close').addEventListener('click',()=>{if($('save').disabled)return;$('detail').close();clearTimeout(timer);previewSerial++;});
 $('detail').addEventListener('cancel',event=>{if($('save').disabled)event.preventDefault();clearTimeout(timer);previewSerial++;});
-$('refresh').addEventListener('click',loadOrders);
+function syncSelection(){
+  const n=$('sync-shops').querySelectorAll('input:checked').length;
+  $('sync-start').textContent=`同步所选 ${n} 家店铺`;
+  $('sync-start').disabled=!n||syncingOrders;
+}
+function showSyncTask(task){
+  if(!task)return;
+  syncingOrders=task.state==='running';
+  $('refresh').disabled=syncingOrders;
+  $('refresh').textContent=syncingOrders?'同步中…':'同步订单';
+  if(syncingOrders){
+    syncMessage=`正在从 OZON 同步 ${task.total} 家店铺 · 已完成 ${task.completed}/${task.total}，可以继续浏览。`;notice(syncMessage);
+    clearTimeout(syncPoll);syncPoll=setTimeout(checkSyncTask,1500);
+  }else{
+    const failures=task.results.filter(r=>r.errors.length).map(r=>`${r.name}（${r.errors.join('；')}）`);
+    syncMessage=task.error||`${task.state==='completed'?'同步完成':task.state==='partial'?'部分同步完成':'同步失败'} · 新增 ${task.added} 笔订单${failures.length?'；失败店铺：'+failures.join('、'):''}`;notice(syncMessage);
+    loadOrders();
+  }
+  syncSelection();
+}
+async function checkSyncTask(){
+  try{showSyncTask((await api('/order-sync')).task);}
+  catch(error){syncingOrders=false;$('refresh').disabled=false;$('refresh').textContent='同步订单';notice('同步状态读取失败，可重新打开同步查看；'+error.message);}
+}
+$('refresh').addEventListener('click',()=>{
+  const selected=$('shop').value;
+  $('sync-shops').innerHTML=[...$('shop').options].filter(o=>o.value).map(o=>`<label class="sync-shop"><input type="checkbox" value="${esc(o.value)}" ${o.value===selected?'checked':''}><span>${esc(o.textContent)}</span></label>`).join('');
+  syncSelection();$('sync-dialog').showModal();
+});
+$('sync-shops').addEventListener('change',syncSelection);
+$('sync-all').addEventListener('click',()=>{$('sync-shops').querySelectorAll('input').forEach(i=>i.checked=true);syncSelection();});
+$('sync-clear').addEventListener('click',()=>{$('sync-shops').querySelectorAll('input').forEach(i=>i.checked=false);syncSelection();});
+$('sync-close').addEventListener('click',()=>$('sync-dialog').close());
+$('sync-start').addEventListener('click',async()=>{
+  const shops=[...$('sync-shops').querySelectorAll('input:checked')].map(i=>i.value);
+  $('sync-start').disabled=true;
+  try{const result=await api('/order-sync',{shops});$('sync-dialog').close();showSyncTask(result.task);}
+  catch(error){notice(error.message);syncSelection();}
+});
 $('cancelled-only')?.addEventListener('change',renderOrders);
 for(const id of ['shop','date'])$(id).addEventListener('change',loadOrders);
 let searchTimer;$('search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(loadOrders,250);});
@@ -581,6 +620,7 @@ async function start(){
     for(const shop of info.shops){const option=document.createElement('option');option.value=shop.shop;option.textContent=shop.shop_name;$('shop').append(option);}
     for(const t of info.templates){const option=document.createElement('option');option.value=t.id;option.textContent=t.name+' · '+t.scope;$('template').append(option);}
     $('gate').hidden=true;$('workspace').hidden=false;$('refresh').hidden=false;await loadOrders();window.dispatchEvent(new Event('compass-ready'));
+    api('/order-sync').then(r=>{if(r.task?.state==='running')showSyncTask(r.task);}).catch(()=>{});
   }catch(error){$('gate-status').textContent=error.message;}
 }
 start();
