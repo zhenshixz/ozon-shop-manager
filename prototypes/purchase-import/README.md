@@ -12,6 +12,8 @@ python -B prototypes/purchase-import/server.py --data-dir K:/github/diagnostics/
 
 打开 http://127.0.0.1:8768/ 。当前已启动本地服务，可直接打开。
 
+批量表格演示：http://127.0.0.1:8768/?demo=1 ，2000条虚拟记录和真实副本独立。支持固定表头/定位列、50/100/200行分页、字段/行/筛选全部页勾选及撤销。默认只看有变更的行，可切换异常/无变更等视图。表格首列勾选作用于本页；金额/重量表头勾选作用于筛选结果的全部页。
+
 `--data-dir` 必须位于 Git 仓库外，包含 `snapshot.json`（orders 数组）、只读复制的 `profit_core.py` 和 `parcel_comparison.py`。真实数据、用户 Excel、截图不放入仓库。服务只绑定回环地址，不对局域网开放。
 
 ## 使用

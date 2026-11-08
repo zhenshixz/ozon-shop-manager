@@ -75,19 +75,24 @@ class Sandbox:
 
     def preview(self, records):
         entries, used = [], {}
+        by_offer, by_sku = {}, {}
+        for o in self.orders:
+            for l in o['lines']:
+                by_offer.setdefault((o['shop_name'], o['posting'], l['offer_id']), []).append((o, l))
+                by_sku.setdefault((o['shop_name'], o['posting'], l['sku']), []).append((o, l))
         for record in records:
             e = dict(row=record['row'], changes=[], notes=[], error='', source=record)
             entries.append(e)
             try:
-                matches = [(o, l) for o in self.orders for l in o['lines']
-                           if o['shop_name'] == record['店铺名称'] and o['posting'] == record['订单编号']
-                           and ((record['平台SKU'] and l['offer_id'] == record['平台SKU']) or
-                                (not record['平台SKU'] and record['SKU ID'] and l['sku'] == record['SKU ID']))]
+                lookup = by_offer if record['平台SKU'] else by_sku
+                matches = lookup.get((record['店铺名称'], record['订单编号'], record['平台SKU'] or record['SKU ID']), [])
                 if len(matches) != 1: raise ValueError('店铺＋订单＋商品无法唯一匹配')
                 o, l = matches[0]
                 e.update(order_id=o['id'], line_id=l['id'], shop=o['shop_name'], posting=o['posting'],
                          name=l.get('name_zh') or l['name'], offer_id=l['offer_id'], sku=l['sku'],
-                         quantity=l['quantity'], image=l.get('image_url', ''), old_profit=o['calculation']['profit'])
+                         quantity=l['quantity'], image=l.get('image_url', ''), old_profit=o['calculation']['profit'],
+                         current_cost=str(D(l['purchase_unit']) * l['quantity']) if l.get('purchase_unit') is not None else None,
+                         current_weight=o['calculation']['weight_g'])
                 if record['SKU ID'] and record['SKU ID'] != l['sku']: raise ValueError('货号与 SKU ID 指向不一致')
                 if decimal(record['产品数量'], True) != D(l['quantity']): raise ValueError('导出件数与当前订单不一致')
                 key = (o['id'], l['id'])
@@ -130,38 +135,74 @@ class Sandbox:
         self.previews = {token: p}
         return p
 
-    def apply(self, token, selected):
+    def prepare(self, token, selected):
         p = self.previews.get(token)
         if not p or p['version'] != self.version: raise ValueError('数据已变化，请重新预览')
         allowed = {c['id'] for e in p['entries'] for c in e['changes'] if not e['error']}
-        if not selected or not set(selected).issubset(allowed): raise ValueError('请选择有效变更')
-        before = copy.deepcopy(self.orders)
-        updated = copy.deepcopy(self.orders)
-        touched, fields = set(), 0
+        selected = set(selected)
+        if not selected or not selected.issubset(allowed): raise ValueError('请选择有效变更')
+        originals = {o['id']: o for o in self.orders}
+        updated, fields = {}, 0
         for e in p['entries']:
             for c in e['changes']:
                 if c['id'] not in selected: continue
-                o = next(o for o in updated if o['id'] == e['order_id'])
+                if e['order_id'] not in updated:
+                    updated[e['order_id']] = copy.deepcopy(originals[e['order_id']])
+                o = updated[e['order_id']]
                 if c['field'] == 'cost':
                     l = next(l for l in o['lines'] if l['id'] == e['line_id'])
                     l.update(purchase_unit=c['value'], purchase_origin='imported')
                 else: o['inputs'].update(weight_override=c['value'], weight_origin='manual')
-                touched.add(o['id']); fields += 1
-        for o in updated:
-            if o['id'] in touched: o['calculation'] = self.calculate(o)
-        self.orders = updated
+                fields += 1
+        for o in updated.values(): o['calculation'] = self.calculate(o)
+        return updated, fields
+
+    def project(self, token, selected):
+        updated, _ = self.prepare(token, selected)
+        return dict(orders=list(updated.values()))
+
+    def apply(self, token, selected):
+        updated, fields = self.prepare(token, selected)
+        before = {o['id']: o for o in self.orders if o['id'] in updated}
+        self.orders = [updated.get(o['id'], o) for o in self.orders]
         self.version += 1
-        summary = dict(orders=len(touched), fields=fields, version=self.version)
+        summary = dict(orders=len(updated), fields=fields, version=self.version, order_ids=list(updated))
         self.history.append(dict(before=before, summary=summary))
         self.previews.clear()
         return self.state()
 
     def undo(self):
         if not self.history: raise ValueError('没有可撤销的导入')
-        self.orders = self.history.pop()['before']
+        before = self.history.pop()['before']
+        self.orders = [before.get(o['id'], o) for o in self.orders]
         self.version += 1
         self.previews.clear()
         return self.state()
+
+
+def bulk_demo(calculate, count=2000):
+    """Synthetic orders, never mixed with the real snapshot rehearsal."""
+    orders, records = [], []
+    names = ['汽车喇叭 16.5 cm', '花坛 0.9×0.9米', '儿童迷你对讲机', '温度调节器', '不锈钢汤锅 20cm']
+    for i in range(count):
+        qty = i % 3 + 1
+        shop, posting = f'演示店{i % 10 + 1:03}', f'DEMO-{i+1:06}-1'
+        offer, sku = f'demo-product-{i % 5 + 1}', f'DEMOSKU{i % 5 + 1}'
+        weight = str(260 * qty)
+        unchanged = i % 10 == 0
+        cost = D('15.20') if unchanged else D('16.35')
+        o = dict(id=i+1, shop_name=shop, posting=posting, status='awaiting_packaging',
+                 inputs=dict(weight_override=weight if unchanged else None,
+                             weight_origin='manual' if unchanged else '', template='auto', rate=None, forwarder='2', other_cost='0'),
+                 lines=[dict(id=i+1, offer_id=offer, sku=sku, name='演示商品 · '+names[i%5], quantity=qty,
+                             purchase_unit=str(cost), purchase_origin='manual' if i%2 else 'inherited',
+                             weight_g='300', unit_price='54', currency='CNY', image_url='')])
+        o['calculation'] = calculate(o)
+        orders.append(o)
+        records.append(dict(row=i+2, **{'店铺名称':shop,'订单编号':posting,'平台SKU':offer,
+            '产品数量':str(qty+1 if i%100==99 else qty),'采购金额(产品-RMB)':str(D('15.20')*qty),
+            'SKU ID':sku,'本地备注':weight+'g'}))
+    return Sandbox(dict(orders=orders), calculate), records
 
 def main():
     parser = argparse.ArgumentParser()
@@ -173,6 +214,7 @@ def main():
     spec = importlib.util.spec_from_file_location('profit_core', args.data_dir / 'profit_core.py')
     core = importlib.util.module_from_spec(spec); sys.modules['profit_core'] = core; spec.loader.exec_module(core)
     sandbox = Sandbox(json.loads((args.data_dir / 'snapshot.json').read_text(encoding='utf-8-sig')), core.calculate)
+    demo, demo_records = bulk_demo(core.calculate)
 
     class Handler(BaseHTTPRequestHandler):
         def reply(self, data, status=200, mime='application/json; charset=utf-8'):
@@ -183,7 +225,8 @@ def main():
 
         def do_GET(self):
             path = urlsplit(self.path).path
-            if path == '/api/state': return self.reply(sandbox.state())
+            box = demo if urlsplit(self.path).query == 'demo=1' else sandbox
+            if path == '/api/state': return self.reply(box.state())
             names = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
             if path not in names: return self.reply(dict(error='不存在'), 404)
             name, mime = names[path]
@@ -191,17 +234,19 @@ def main():
 
         def do_POST(self):
             try:
+                path = urlsplit(self.path).path
+                box = demo if urlsplit(self.path).query == 'demo=1' else sandbox
                 if self.headers.get('Origin') not in (None, f'http://127.0.0.1:{args.port}', f'http://localhost:{args.port}'):
                     raise ValueError('仅允许本地模拟页面提交')
                 length = int(self.headers.get('Content-Length', 0))
                 if not 0 < length <= 5_000_000: raise ValueError('文件或请求超过 5 MB')
                 raw = self.rfile.read(length)
-                if self.path == '/api/preview': return self.reply(sandbox.preview(read_xlsx(raw)))
+                if path == '/api/preview': return self.reply(box.preview(read_xlsx(raw)))
                 payload = json.loads(raw)
-                if self.path == '/api/project':
-                    return self.reply(copy.deepcopy(sandbox).apply(payload['token'], payload['selected']))
-                if self.path == '/api/apply': return self.reply(sandbox.apply(payload['token'], payload['selected']))
-                if self.path == '/api/undo': return self.reply(sandbox.undo())
+                if path == '/api/demo-preview' and box is demo: return self.reply(box.preview(demo_records))
+                if path == '/api/project': return self.reply(box.project(payload['token'], payload['selected']))
+                if path == '/api/apply': return self.reply(box.apply(payload['token'], payload['selected']))
+                if path == '/api/undo': return self.reply(box.undo())
                 self.reply(dict(error='不存在'), 404)
             except (ValueError, KeyError, zipfile.BadZipFile, E.ParseError) as error:
                 self.reply(dict(error=str(error)), 400)

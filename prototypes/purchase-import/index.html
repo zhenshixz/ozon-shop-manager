@@ -2,10 +2,15 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>采购与实称导入 · 本地模拟</title><link rel="stylesheet" href="/style.css"></head>
 <body><aside><div class="brand"><b>O</b><div>OZON 店铺助手<small>店铺运营工作台</small></div></div><div class="nav-label">运营工具</div><div class="nav">⇄　采购与实称导入</div><p class="aside-note">本地模拟环境<br>使用真实订单副本<br>全部操作仅保留在本次会话</p></aside>
 <main><header><div class="crumb">订单利润 / 批量导入</div><span class="sandbox">● 本地模拟 · 不影响线上</span></header>
-<section class="heading"><div><h1>采购与实称导入</h1><p>核对每一处变化，再决定更新哪些记录。</p></div><button id="undo" class="secondary" disabled>↶ 撤销上次模拟</button></section>
+<section class="heading"><div><h1>采购与实称导入</h1><p id="intro">核对每一处变化，再决定更新哪些记录。</p></div><div class="heading-actions"><a id="demo-link" href="/?demo=1" class="secondary">查看 2,000 行演示 ↗</a><button id="undo" class="secondary" disabled>↶ 撤销上次模拟</button></div></section>
 <div class="steps"><span class="active">① 上传表格</span><i></i><span id="step2">② 核对变更</span><i></i><span id="step3">③ 完成导入</span></div>
 <section class="upload card"><div class="file-icon">↥</div><div><h2>导入妙手导出的 Excel</h2><p id="filename">采购金额按商品行合计 · 备注按整包实称（如 854g）</p></div><label class="primary file-label">选择 Excel<input id="file" type="file" accept=".xlsx"></label></section>
 <div id="notice" role="status" hidden></div>
-<section id="review" class="card" hidden><div class="section-head"><div><h2>确认本次变更 <span id="count" class="badge"></span></h2><p id="review-note">有效变更默认勾选；采购成本、整包重量可以分别取消。</p></div><button id="clear" class="text-button">取消全部勾选</button></div><div class="tools"><input id="search" placeholder="搜索订单号、商品名、SKU / 货号" aria-label="搜索变更"><select id="shop" aria-label="筛选店铺"><option value="">全部店铺</option></select><span id="match-note"></span></div><div id="changes"></div><div class="commit"><div><strong id="selection"></strong><small>仅更新勾选的记录，不联动覆盖其他订单。</small></div><button id="apply" class="primary">确认更新模拟数据</button></div></section>
-<section class="card"><div class="section-head"><div><h2>当前模拟订单 <span id="order-count" class="badge"></span></h2><p>来自服务器的只读快照 · 更新后在这里核对成本、重量与利润</p></div><span id="revision" class="subtle"></span></div><div id="orders"></div></section>
+<section id="review" class="card" hidden>
+<div class="section-head"><div><h2>核对导入明细 <span id="count" class="badge"></span></h2><p>每行对应一个订单商品；蓝色为新值，橙色提示人工核算覆盖。</p></div><button id="clear" class="text-button">取消所有勾选</button></div>
+<div id="tabs" class="tabs" role="group" aria-label="查看记录类型"></div>
+<div class="tools"><input id="search" placeholder="搜索订单号、商品名、SKU / 货号" aria-label="搜索变更"><select id="shop" aria-label="筛选店铺"><option value="">全部店铺</option></select><div class="bulk-tools"><button id="select-filtered" class="secondary compact">勾选筛选结果</button><button id="unselect-filtered" class="secondary compact">取消筛选结果</button></div><span id="match-note"></span></div>
+<div id="changes" class="table-scroll" tabindex="0" aria-label="导入差异表，可横向和纵向滚动"></div><div id="pager" class="pager"></div>
+<div class="commit"><div><strong id="selection"></strong><small>勾选在翻页、筛选后保留；仅更新所选记录。</small></div><button id="apply" class="primary">确认更新模拟数据</button></div></section>
+<section class="card"><div class="section-head"><div><h2>当前模拟订单 <span id="order-count" class="badge"></span></h2><p id="orders-note">来自服务器的只读快照 · 更新后在这里核对成本、重量与利润</p></div><span id="revision" class="subtle"></span></div><div id="orders" class="table-scroll orders-scroll"></div><div id="orders-pager" class="pager"></div></section>
 <p class="footnote">重启模拟服务会恢复原始快照。文件与订单数据不上传第三方，也不会写入线上数据库。</p></main><script src="/app.js"></script></body></html>
