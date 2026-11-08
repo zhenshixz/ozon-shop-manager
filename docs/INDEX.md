@@ -10,6 +10,8 @@
 
 ## 最近的重要变更
 
+- [采购价与实称导入：本地模拟页面与真实Excel流程验证（未上线）](../MAINTENANCE-20261108-IMPORT-SANDBOX.md)
+
 - [妙手采购成本接入：主/子账号权限、官方API缺口与批量导入评估（未开发）](RESEARCH-20261108-MIAOSHOU-PURCHASE-COST.md)
 - [多件默认重量按单件实称乘数量，保留多件人工核算](../MAINTENANCE-20261108-UNIT-WEIGHT-DEFAULTS.md)
 - [同商品旧单重量统一更新，覆盖旧人工和拆单交接](../MAINTENANCE-20261108-GLOBAL-WEIGHT-REFRESH.md)

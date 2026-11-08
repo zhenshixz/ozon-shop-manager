@@ -1,0 +1,35 @@
+const $=s=>document.querySelector(s), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let state, initial, preview, selected=new Set(), projected, projectionSeq=0;
+const yuan=v=>v==null?'未填写':`¥${Number(v).toFixed(2)}`, grams=v=>v==null?'未填写':`${Number(v)} 克`;
+async function api(path,data,raw=false){const r=await fetch('/api/'+path,data?{method:'POST',headers:{'Content-Type':raw?'application/octet-stream':'application/json'},body:raw?data:JSON.stringify(data)}:{});const d=await r.json();if(!r.ok)throw Error(d.error);return d;}
+function notice(text,bad=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').className=bad?'bad':'';}
+function safeImage(url){try{const u=new URL(url);return u.protocol==='https:'?esc(u.href):'';}catch{return '';}}
+function showOrders(){
+ $('#order-count').textContent=state.orders.length+' 笔';$('#revision').textContent=`模拟版本 ${state.version}`;$('#undo').disabled=!state.history.length;
+ $('#orders').innerHTML=state.orders.map(o=>{const base=initial.orders.find(x=>x.id===o.id), c=o.calculation;
+ return `<div class="order-row"><div><span class="shop-tag">${esc(o.shop_name)}</span><p><button class="posting" data-copy="${esc(o.posting)}">${esc(o.posting)} ⧉</button></p></div><div class="name">${esc(o.lines.map(l=>l.name_zh||l.name).join(' / '))}<p>数量 ${o.lines.reduce((n,l)=>n+l.quantity,0)}</p></div><div><span class="label">采购合计</span><strong class="${base.calculation.purchase_cost!==c.purchase_cost?'updated':''}">${yuan(c.purchase_cost)}</strong></div><div><span class="label">整包计费重量</span><strong class="${base.calculation.weight_g!==c.weight_g?'updated':''}">${grams(c.weight_g)}</strong></div><div><span class="label">预估利润</span><strong>${yuan(c.profit)}</strong>${base.calculation.profit!==c.profit?`<small class="subtle"><br>原 ${yuan(base.calculation.profit)}</small>`:''}</div></div>`;}).join('');
+}
+function field(e,kind){const c=e.changes.find(c=>c.field===kind),fmt=kind==='cost'?yuan:grams;
+ if(!c)return `<div class="unchanged">${kind==='cost'?'采购合计':'整包实称'}<br>${esc(e.notes.filter(n=>kind==='cost'?n.includes('采购'):!n.includes('采购')).join('；')||'本次无变更')}</div>`;
+ return `<label class="change"><span class="field-title"><input type="checkbox" data-change="${esc(c.id)}" ${selected.has(c.id)?'checked':''}>${esc(c.label)}</span><div class="values"><span class="old">${fmt(c.old)}</span><span class="arrow">→</span><span class="new">${fmt(c.new)}</span></div>${c.origin==='manual'?'<span class="origin">将替换已人工核算值</span>':''}${kind==='cost'?`<span class="subtle" style="display:block;margin:5px 0 0 23px;font-size:10px">${esc(e.quantity)} 件合计 · 单价 ¥${Number(c.value)}</span>`:''}</label>`;
+}
+function showPreview(){
+ const q=$('#search').value.trim().toLowerCase(), shop=$('#shop').value;
+ const visible=preview.entries.filter(e=>(!shop||e.shop===shop)&&(!q||[e.posting,e.name,e.sku,e.offer_id,e.source['订单编号']].join(' ').toLowerCase().includes(q)));
+ $('#changes').innerHTML=visible.map(e=>`<div class="entry"><div class="entry-top"><span class="shop-tag">${esc(e.shop||e.source['店铺名称'])}</span><button class="posting" data-copy="${esc(e.posting||e.source['订单编号'])}">${esc(e.posting||e.source['订单编号'])} ⧉</button><span>Excel 第 ${e.row} 行</span></div>${e.error?`<div class="error">${esc(e.error)}</div>`:`<div class="entry-body"><div class="product">${safeImage(e.image)?`<img src="${safeImage(e.image)}" alt="">`:''}<div><strong>${esc(e.name)}</strong><small>货号 ${esc(e.offer_id)}</small><small>SKU ${esc(e.sku)} · <span class="quantity">数量 ${e.quantity}</span></small></div></div>${field(e,'cost')}${field(e,'weight')}<div class="profit">整单预估利润<b class="${Number((projected?.orders.find(o=>o.id===e.order_id)||state.orders.find(o=>o.id===e.order_id)).calculation.profit)<0?'loss':''}">${yuan((projected?.orders.find(o=>o.id===e.order_id)||state.orders.find(o=>o.id===e.order_id)).calculation.profit)}</b><span class="from">当前 ${yuan(e.old_profit)}</span></div></div>${e.notes.length?`<div class="entry-note">${esc(e.notes.join(' · '))}</div>`:''}`}</div>`).join('')||'<div class="entry unchanged">没有符合筛选的记录</div>';
+ const entries=preview.entries.filter(e=>e.changes.some(c=>selected.has(c.id))), orders=new Set(entries.map(e=>e.order_id)),shops=new Set(entries.map(e=>e.shop));
+ const changes=preview.entries.flatMap(e=>e.changes).filter(c=>selected.has(c.id));
+ $('#selection').textContent=`${shops.size} 家店 · ${orders.size} 笔订单 · 采购成本 ${changes.filter(c=>c.field==='cost').length} 项 · 重量 ${changes.filter(c=>c.field==='weight').length} 项`;
+ $('#apply').disabled=!selected.size;$('#clear').textContent=selected.size?'取消全部勾选':'全选有效变更';
+ $('#count').textContent=preview.entries.reduce((n,e)=>n+e.changes.length,0)+' 项';
+ $('#match-note').textContent=`${visible.length} / ${preview.entries.length} 行`;
+}
+async function project(){const seq=++projectionSeq;if(!selected.size){projected=null;showPreview();return;}$('#apply').disabled=true;try{const p=await api('project',{token:preview.token,selected:[...selected]});if(seq===projectionSeq){projected=p;showPreview();}}catch(e){notice(e.message,true);$('#apply').disabled=true;}}
+$('#file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{preview=await api('preview',await f.arrayBuffer(),true);selected=new Set(preview.entries.flatMap(e=>e.changes.map(c=>c.id)));projected=null;$('#filename').textContent=f.name;$('#review').hidden=false;$('#step2').className='active';$('#step3').className='';$('#search').value='';$('#shop').innerHTML='<option value="">全部店铺</option>'+[...new Set(preview.entries.map(e=>e.shop).filter(Boolean))].map(s=>`<option>${esc(s)}</option>`).join('');showPreview();await project();notice('表格已读取。请检查下方差异，确认后才会更新模拟数据。');$('#review').scrollIntoView({behavior:'smooth',block:'start'});}catch(error){notice(error.message,true);}finally{e.target.value='';}};
+$('#changes').onchange=e=>{const id=e.target.dataset.change;if(!id)return;e.target.checked?selected.add(id):selected.delete(id);showPreview();project();};
+$('#search').oninput=()=>showPreview();$('#shop').onchange=()=>showPreview();
+$('#clear').onclick=()=>{selected=selected.size?new Set():new Set(preview.entries.flatMap(e=>e.changes.map(c=>c.id)));showPreview();project();};
+$('#apply').onclick=async()=>{try{$('#apply').disabled=true;state=await api('apply',{token:preview.token,selected:[...selected]});const h=state.history.at(-1);$('#review').hidden=true;$('#step3').className='active';showOrders();notice(`模拟更新完成：${h.orders} 笔订单、${h.fields} 项变更。未勾选字段与其他订单保持原值，可撤销本次操作。`);}catch(e){notice(e.message,true);$('#apply').disabled=false;}};
+$('#undo').onclick=async()=>{try{state=await api('undo',{});$('#review').hidden=true;showOrders();notice('已撤销上次模拟导入，相关字段与利润已恢复。');}catch(e){notice(e.message,true);}};
+document.addEventListener('click',async e=>{const text=e.target.closest('[data-copy]')?.dataset.copy;if(text){await navigator.clipboard.writeText(text);notice('订单号已复制：'+text);}});
+api('state').then(d=>{state=d;initial=structuredClone(d);showOrders();}).catch(e=>notice(e.message,true));
