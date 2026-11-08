@@ -112,7 +112,7 @@ class PurchaseReuseTest(unittest.TestCase):
         self.assertIsNone(o3['previous_weight'])
         self.assertEqual(o3['lines'][0]['previous_cost'],'15')
         self.assertEqual(o3['lines'][0]['previous_cost_shop'],'s1')
-    def test_measured_weight_rejects_legacy_cross_quantity_override(self):
+    def test_cross_quantity_default_scales_and_manual_multi_remains(self):
         source=self.add('source',shop='s1',quantity=1)
         inherited_t=self.add('inherited-t',shop='s1',quantity=2)
         manual_t=self.add('manual-t',shop='s1',quantity=1)
@@ -124,25 +124,25 @@ class PurchaseReuseTest(unittest.TestCase):
             order['lines'][0]['purchase_unit']='11.5'
             order['inputs']['weight_override']='320'
             p.save_order(db,order,now=200)
-        self.assertIsNone(self.load(inherited_t)['inputs']['weight_override'])
+        self.assertEqual(self.load(inherited_t)['inputs']['weight_override'],'640')
         with p.connection(self.path) as db:
-            # Existing deployment stored twice the source's entire package weight.
-            db.execute("INSERT INTO profit_inputs(order_id,weight_override,updated) VALUES (?,'640',?)",
+            # Repair a legacy default that copied only one item's weight.
+            db.execute("INSERT OR REPLACE INTO profit_inputs(order_id,weight_override,updated) VALUES (?,'320',?)",
                        (inherited_t,201))
-            db.execute("INSERT INTO profit_weight_sources VALUES (?,'inherited',?,?,'640')",
+            db.execute("INSERT OR REPLACE INTO profit_weight_sources VALUES (?,'inherited',?,?,'640')",
                        (inherited_t,source,201))
             p.inherit_measured_weights(db,now=202)
             audit=db.execute("SELECT old_weight FROM profit_weight_audit WHERE order_id=?",(inherited_t,)).fetchone()
-            self.assertEqual(audit['old_weight'],'640')
-        self.assertIsNone(self.load(inherited_t)['inputs']['weight_override'])
+            self.assertEqual(audit['old_weight'],'320')
+        self.assertEqual(self.load(inherited_t)['inputs']['weight_override'],'640')
         self.assertEqual(self.load(inherited_t)['calculation']['api_weight_g'],'400.0')
         with p.connection(self.path) as db:
             order=p.load_order(db,inherited_t)
             order['inputs']['weight_override']='475'
             p.save_order(db,order,now=203)
         next_two=self.add('next-two',quantity=2)
-        self.assertEqual(self.load(next_two)['inputs']['weight_override'],'475')
-        self.assertEqual(self.load(next_two)['calculation']['template']['id'],'xs')
+        self.assertEqual(self.load(next_two)['inputs']['weight_override'],'640')
+        self.assertEqual(self.load(next_two)['calculation']['template']['id'],'budget')
         self.assertEqual(self.load(manual_t)['inputs']['weight_override'],'320')
         self.assertEqual(self.load(manual_t)['inputs']['weight_origin'],'inherited')
         self.assertIsNone(self.load(cross_t)['inputs']['weight_override'])
@@ -170,7 +170,7 @@ class PurchaseReuseTest(unittest.TestCase):
         self.assertEqual(self.load(automatic)['calculation']['weight_g'],'312')
         self.assertEqual(self.load(original)['calculation']['weight_g'],'312')
         self.assertIsNone(self.load(use_api)['inputs']['weight_override'])
-        self.assertIsNone(self.load(different_count)['inputs']['weight_override'])
+        self.assertEqual(self.load(different_count)['inputs']['weight_override'],'624')
 
     def test_global_refresh_includes_dispatch_and_is_idempotent(self):
         old=self.add('old');handed=self.add('handed');latest=self.add('latest')
@@ -193,5 +193,33 @@ class PurchaseReuseTest(unittest.TestCase):
             order=p.load_order(db,old);order['inputs']['weight_override']='480'
             p.save_order(db,order,now=400)
         for oid in (old,handed,latest):self.assertEqual(self.load(oid)['calculation']['weight_g'],'480')
+
+    def test_unit_updates_scaled_defaults_but_preserves_manual_multi_weights(self):
+        unit=self.add('unit');two=self.add('two',quantity=2);three=self.add('three',quantity=3)
+        measured=self.add('measured',quantity=2)
+        with p.connection(self.path) as db:
+            order=p.load_order(db,measured);order['inputs']['weight_override']='555'
+            p.save_order(db,order,now=90)
+            order=p.load_order(db,unit);order['inputs']['weight_override']='300'
+            p.save_order(db,order,now=100)
+        self.assertEqual(self.load(two)['inputs']['weight_override'],'600')
+        self.assertEqual(self.load(three)['inputs']['weight_override'],'900')
+        self.assertEqual(self.load(two)['inputs']['weight_origin'],'scaled')
+        with p.connection(self.path) as db:
+            order=p.load_order(db,unit);order['inputs']['weight_override']='475'
+            p.save_order(db,order,now=200)
+            self.assertEqual(p.inherit_measured_weights(db,now=201),[])
+        self.assertEqual(self.load(two)['inputs']['weight_override'],'950')
+        self.assertEqual(self.load(three)['inputs']['weight_override'],'1425')
+        self.assertEqual(self.load(measured)['inputs']['weight_override'],'555')
+        future=self.add('future',quantity=3)
+        self.assertEqual(self.load(future)['inputs']['weight_override'],'1425')
+        with p.connection(self.path) as db:
+            order=p.load_order(db,two);order['inputs']['weight_override']='880'
+            p.save_order(db,order,now=300)
+            order=p.load_order(db,unit);order['inputs']['weight_override']='500'
+            p.save_order(db,order,now=400)
+        self.assertEqual(self.load(two)['inputs']['weight_override'],'880')
+        self.assertEqual(self.load(three)['inputs']['weight_override'],'1500')
 
 if __name__=='__main__':unittest.main()

@@ -210,13 +210,24 @@ def latest_measured_weight(db, shop, quantity, offer_id='', sku='', exclude_orde
         (shop, value, exclude_order_id, quantity)).fetchone()
 
 
+def default_measured_weight(db, shop, quantity, offer_id='', sku='', exclude_order_id=-1):
+    if quantity>1:
+        unit=latest_measured_weight(db,shop,1,offer_id,sku,exclude_order_id)
+        if unit:
+            value=D(unit['weight_override'])*quantity
+            if value<=1000000:
+                return dict(unit,weight_override=str(value),origin='scaled')
+    exact=latest_measured_weight(db,shop,quantity,offer_id,sku,exclude_order_id)
+    return dict(exact,origin='inherited') if exact else None
+
+
 def clear_incompatible_inherited_weights(db, now, shop=None):
     """Discard derived weights if the original package no longer matches."""
     query = '''SELECT w.order_id,w.source_order_id,i.weight_override
         FROM profit_weight_sources w
         JOIN profit_inputs i ON i.order_id=w.order_id
         JOIN profit_orders o ON o.id=w.order_id
-        WHERE w.origin='inherited' AND NOT EXISTS (
+        WHERE w.origin IN ('inherited','scaled') AND NOT EXISTS (
             SELECT 1 FROM profit_orders src
             JOIN profit_lines sl ON sl.order_id=src.id
             JOIN profit_lines l ON l.order_id=o.id
@@ -225,7 +236,7 @@ def clear_incompatible_inherited_weights(db, now, shop=None):
             WHERE src.id=w.source_order_id AND src.shop=o.shop
             AND CAST(si.weight_override AS REAL)>0
             AND COALESCE(sw.origin,'manual')='manual'
-            AND l.quantity=sl.quantity
+            AND (l.quantity=sl.quantity OR (sl.quantity=1 AND l.quantity>1))
             AND ((l.offer_id!='' AND l.offer_id=sl.offer_id)
                  OR (l.offer_id='' AND l.sku!='' AND l.sku=sl.sku))
             AND (SELECT COUNT(*) FROM profit_lines WHERE order_id=o.id)=1
@@ -257,8 +268,8 @@ def inherit_measured_weights(db, now=None, shop=None):
         FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
         LEFT JOIN profit_inputs i ON i.order_id=o.id
         LEFT JOIN profit_weight_sources ws ON ws.order_id=o.id
-        WHERE (ws.origin IN ('inherited','dispatch')
-            OR (COALESCE(ws.origin,'manual')='manual' AND CAST(i.weight_override AS REAL)>0)
+        WHERE (ws.origin IN ('inherited','scaled') OR (ws.origin='dispatch' AND l.quantity=1)
+            OR (COALESCE(ws.origin,'manual')='manual' AND l.quantity=1 AND CAST(i.weight_override AS REAL)>0)
             OR (ws.order_id IS NULL
             AND (i.weight_override IS NULL OR trim(i.weight_override)='')))
         AND lower(o.status) NOT IN ('cancelled','canceled','returned')
@@ -272,12 +283,12 @@ def inherit_measured_weights(db, now=None, shop=None):
     for row in db.execute(query, args).fetchall():
         key = (row['shop'],row['quantity'],row['offer_id'],row['sku'])
         if key not in references:
-            references[key] = latest_measured_weight(db,*key)
+            references[key] = default_measured_weight(db,*key)
         prior = references[key]
         if prior is None or row['order_id']==prior['order_id']: continue
         value = prior['weight_override']
         old = row['weight_override']
-        if row['source_order_id']==prior['order_id'] and old and D(old)==D(value):
+        if row['origin']==prior['origin'] and row['source_order_id']==prior['order_id'] and old and D(old)==D(value):
             continue
         if old is not None:
             audit=json.dumps(dict(channel='weight-reuse-refresh',old_origin=row['origin'],old_source_order_id=row['source_order_id'],
@@ -288,8 +299,8 @@ def inherit_measured_weights(db, now=None, shop=None):
             VALUES (?,?,'auto',NULL,'2','0',?)
             ON CONFLICT(order_id) DO UPDATE SET weight_override=excluded.weight_override''',
             (row['order_id'], value, now))
-        db.execute("INSERT OR REPLACE INTO profit_weight_sources VALUES (?,'inherited',?,?,?)",
-            (row['order_id'], prior['order_id'], now, value))
+        db.execute("INSERT OR REPLACE INTO profit_weight_sources VALUES (?,?,?,?,?)",
+            (row['order_id'],prior['origin'], prior['order_id'], now, value))
         filled.append(dict(order_id=row['order_id'], source_order_id=prior['order_id'], weight_override=value))
     return filled
 
@@ -713,7 +724,7 @@ def enrich_order_sync_info(db, order):
         line = lines[0]
         field, val = ('offer_id', line.get('offer_id') or '') if (line.get('offer_id') or '') else ('sku', line.get('sku') or '')
         if val:
-            ref = latest_measured_weight(db,shop,line['quantity'],line['offer_id'],line['sku'],oid)
+            ref = default_measured_weight(db,shop,line['quantity'],line['offer_id'],line['sku'],oid)
             if ref:
                 order['previous_weight'] = dict(weight_g=ref['weight_override'],posting=ref['posting'])
             w_rows = db.execute('''SELECT o.id AS order_id,i.weight_override

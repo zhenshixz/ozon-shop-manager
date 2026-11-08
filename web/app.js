@@ -314,9 +314,9 @@ function purchaseReuseBadge(order){
     const sources=[...new Set(reused.map(line=>line.purchase_source_posting).filter(Boolean))];
     badges.push(`<span class="purchase-reuse-badge" title="${esc(sources.length?'来源订单：'+sources.join('、'):'沿用最近一次人工填写的同商品采购单价')}" aria-label="采购价沿用，可在详情修改">采购价沿用</span>`);
   }
-  if(order.inputs?.weight_origin==='inherited'&&order.inputs?.weight_override!=null){
+  if(['inherited','scaled'].includes(order.inputs?.weight_origin)&&order.inputs?.weight_override!=null){
     const src=order.inputs?.weight_source_posting||order.weight_source_posting||'';
-    badges.push(`<span class="purchase-reuse-badge" title="${esc(src?'来源订单：'+src:'沿用最近一次核对的同商品实测重量')}" aria-label="实测重量沿用，可在详情取消勾选">实测重量沿用</span>`);
+    badges.push(`<span class="purchase-reuse-badge" title="${esc(src?'来源订单：'+src:'沿用最近一次核对的同商品实测重量')}">${order.inputs.weight_origin==='scaled'?'单件实称 × 数量':'实测重量沿用'}</span>`);
   }
   return badges.join('');
 }
@@ -332,13 +332,15 @@ function updateWeightReuseUI(){
   const note=$('weight-reuse-note'),btn=$('weight-suggestion');
   if(!current)return;
   const p=current.inputs||{},pw=current.previous_weight;
-  const isInherited=weightMode==='custom'&&p.weight_origin==='inherited'&&
+  const isInherited=weightMode==='custom'&&['inherited','scaled'].includes(p.weight_origin)&&
     p.weight_override!=null&&Number($('weight').value)===Number(p.weight_override);
   if(note){
     if(isInherited){
       const src=p.weight_source_posting||pw?.posting||'';
       note.hidden=false;
-      note.textContent=`实测重量沿用${src?' · 来源 '+src:''}，取消勾选可恢复 API 重量`;
+      const qty=current.lines.length===1?current.lines[0].quantity:1;
+      const label=p.weight_origin==='scaled'?`单件实称 ${Number(p.weight_override)/qty} 克 × ${qty} 件 = ${Number(p.weight_override)} 克（默认推算，可修改）`:'实测重量沿用';
+      note.textContent=`${label}${src?' · 来源 '+src:''}，取消勾选可恢复 API 重量`;
     }else{
       note.hidden=true;
     }
@@ -476,7 +478,7 @@ function showParcelComparison(data,reset=false,pending=false){
     input.closest('label').hidden=!selectedKeys.includes(key);
     input.placeholder=p.default_weight==null?'填写克数':String(Number(p.default_weight));
     const source=fields.querySelector(`[data-parcel-source="${key}"]`);
-    source.textContent=parcelWeights[key]?'本单录入':key.includes('-')?'留空沿用首包':p.reference_posting?'同件数历史实称':'API 估重参考';
+    source.textContent=parcelWeights[key]?'本单录入':key.includes('-')?'留空沿用首包':p.source==='单件实称推算'?'单件实称 × 数量':p.reference_posting?'同件数历史实称':'API 估重参考';
     source.title=p.reference_posting?`来源 ${p.reference_posting}`:'';
   }
   $('parcel-note').textContent=`货代费 ${money(forwarder)}/包。历史实称自动带入，可修改。只有 API 估重时，请填写实称后再核算。`;

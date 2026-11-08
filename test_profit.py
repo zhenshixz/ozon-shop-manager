@@ -240,8 +240,10 @@ class ProfitTest(unittest.TestCase):
         estimate=client.get(path).json['order']['parcel_comparison']['packages']['one']
         self.assertEqual(estimate['default_weight'],'312')
         self.assertEqual(estimate['reference_posting'],'TEST-1')
+        latest_order=client.get(path).json['order']
+        self.assertEqual(latest_order['parcel_comparison']['packages']['two']['default_weight'],'624')
         body={'lines':[{'id':order['lines'][0]['id'],'purchase_unit':'9.12'}],
-              'inputs':{},'dispatch_choice':2,'parcel_weights':{}}
+              'inputs':{'weight_override':latest_order['inputs']['weight_override']},'dispatch_choice':2,'parcel_weights':{}}
         saved=client.post(path,json=body,headers={'X-CSRF-Token':token}).json['order']
         self.assertEqual(saved['dispatch_plan']['weights'],{'one':'312'})
         self.assertEqual([pack['weight'] for pack in saved['dispatch_plan']['packages']],['312']*3)

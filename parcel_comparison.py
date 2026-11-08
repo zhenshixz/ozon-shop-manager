@@ -93,6 +93,7 @@ def compare(db, order, trial_weights=None):
 
     if base['weight_source'] == 'custom':
         source = '本单计费重量'
+        if inputs.get('weight_origin')=='scaled':source='单件实称推算'
         if inputs.get('weight_origin') == 'inherited' and inputs.get('inherited_weight_g') == base['custom_weight_g']:
             source = '同件数历史实称'
     else:
@@ -100,9 +101,9 @@ def compare(db, order, trial_weights=None):
     add_package('all', '合发整包', lines, base['weight_g'], source, inputs.get('template', 'auto'))
 
     def add_split_package(key, label, line, quantity):
-        ref = core.latest_measured_weight(db,order['shop'],quantity,line['offer_id'],line['sku'],order['id'])
+        ref = core.default_measured_weight(db,order['shop'],quantity,line['offer_id'],line['sku'],order['id'])
         if ref:
-            weight, source = ref['weight_override'], '同件数历史实称'
+            weight, source = ref['weight_override'], '单件实称推算' if ref['origin']=='scaled' else '同件数历史实称'
         elif line.get('weight_g') not in (None, ''):
             weight, source = core.D(line['weight_g']) * quantity, 'API 估重'
         else:
