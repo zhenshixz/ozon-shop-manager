@@ -249,7 +249,7 @@ def clear_incompatible_inherited_weights(db, now, shop=None):
 
 
 def inherit_measured_weights(db, now=None, shop=None):
-    """Refresh automatic weights from the latest matching measured package."""
+    """Apply the latest confirmed matching package weight to existing orders."""
     now = time.time() if now is None else now
     clear_incompatible_inherited_weights(db,now,shop)
     query = '''SELECT o.id AS order_id,o.shop,l.offer_id,l.sku,l.quantity,
@@ -257,7 +257,9 @@ def inherit_measured_weights(db, now=None, shop=None):
         FROM profit_lines l JOIN profit_orders o ON o.id=l.order_id
         LEFT JOIN profit_inputs i ON i.order_id=o.id
         LEFT JOIN profit_weight_sources ws ON ws.order_id=o.id
-        WHERE (ws.origin='inherited' OR (ws.order_id IS NULL
+        WHERE (ws.origin IN ('inherited','dispatch')
+            OR (COALESCE(ws.origin,'manual')='manual' AND CAST(i.weight_override AS REAL)>0)
+            OR (ws.order_id IS NULL
             AND (i.weight_override IS NULL OR trim(i.weight_override)='')))
         AND lower(o.status) NOT IN ('cancelled','canceled','returned')
         AND NOT EXISTS (SELECT 1 FROM profit_dispatch_plans d WHERE d.order_id=o.id AND d.applied=0)
@@ -272,13 +274,13 @@ def inherit_measured_weights(db, now=None, shop=None):
         if key not in references:
             references[key] = latest_measured_weight(db,*key)
         prior = references[key]
-        if prior is None: continue
+        if prior is None or row['order_id']==prior['order_id']: continue
         value = prior['weight_override']
         old = row['weight_override']
         if row['source_order_id']==prior['order_id'] and old and D(old)==D(value):
             continue
-        if row['origin']=='inherited':
-            audit=json.dumps(dict(channel='weight-reuse-refresh',old_source_order_id=row['source_order_id'],
+        if old is not None:
+            audit=json.dumps(dict(channel='weight-reuse-refresh',old_origin=row['origin'],old_source_order_id=row['source_order_id'],
                                   source_order_id=prior['order_id']))
             db.execute('INSERT INTO profit_weight_audit(order_id,old_weight,new_weight,changed,source) VALUES (?,?,?,?,?)',
                        (row['order_id'],old,value,now,audit))
@@ -656,6 +658,11 @@ def save_order(db, order, now=None, source='web-save'):
         (order['id'],p.get('weight_override'),p.get('template','auto'),p.get('rate'),p.get('forwarder','2'),p.get('other_cost','0'),now))
     inherit_purchase_prices(db,now,order['shop'])
     inherit_measured_weights(db,now,order['shop'])
+    refreshed=load_order(db,order['id'])
+    order['inputs']=refreshed['inputs']
+    order['weight_origin']=refreshed['weight_origin']
+    order['weight_source_posting']=refreshed['weight_source_posting']
+    order['calculation']=calculate(order)
     return order
 
 

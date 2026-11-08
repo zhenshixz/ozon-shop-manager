@@ -10,6 +10,7 @@
 
 ## 最近的重要变更
 
+- [同商品旧单重量统一更新，覆盖旧人工和拆单交接](../MAINTENANCE-20261108-GLOBAL-WEIGHT-REFRESH.md)
 - [手动选择店铺并从 OZON 同步订单](../MAINTENANCE-20261107-MANUAL-ORDER-SYNC.md)
 - [核算问题复盘、同类订单检查与拆分边界修复](../MAINTENANCE-20261107-CALCULATION-AUDIT.md)
 - [拆发按各包档位计算平台费用](../MAINTENANCE-20261107-PARCEL-RATES.md)

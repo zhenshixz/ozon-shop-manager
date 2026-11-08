@@ -147,7 +147,7 @@ class PurchaseReuseTest(unittest.TestCase):
         self.assertEqual(self.load(manual_t)['inputs']['weight_origin'],'inherited')
         self.assertIsNone(self.load(cross_t)['inputs']['weight_override'])
 
-    def test_confirming_weight_refreshes_existing_inheritance_only(self):
+    def test_confirming_weight_refreshes_old_manual_and_inherited_packages(self):
         original=self.add('old-source')
         new=self.add('new-source')
         automatic=self.add('automatic')
@@ -168,8 +168,30 @@ class PurchaseReuseTest(unittest.TestCase):
             self.assertEqual(tuple(audit),('100','312'))
         self.assertEqual(self.load(automatic)['inputs']['weight_source_posting'],'new-source')
         self.assertEqual(self.load(automatic)['calculation']['weight_g'],'312')
-        self.assertEqual(self.load(original)['calculation']['weight_g'],'100')
+        self.assertEqual(self.load(original)['calculation']['weight_g'],'312')
         self.assertIsNone(self.load(use_api)['inputs']['weight_override'])
         self.assertIsNone(self.load(different_count)['inputs']['weight_override'])
+
+    def test_global_refresh_includes_dispatch_and_is_idempotent(self):
+        old=self.add('old');handed=self.add('handed');latest=self.add('latest')
+        with p.connection(self.path) as db:
+            order=p.load_order(db,old);order['inputs']['weight_override']='312'
+            p.save_order(db,order,now=100)
+            db.execute("UPDATE profit_weight_sources SET origin='dispatch',source_order_id=? WHERE order_id=?",(old,handed))
+            order=p.load_order(db,latest);order['inputs']['weight_override']='475'
+            p.save_order(db,order,now=200)
+            self.assertEqual(p.inherit_measured_weights(db,now=201),[])
+            self.assertEqual(p.load_order(db,latest)['inputs']['weight_origin'],'manual')
+            audit=db.execute('SELECT source,old_weight,new_weight FROM profit_weight_audit WHERE order_id=? ORDER BY id DESC',(handed,)).fetchone()
+            self.assertEqual((audit['old_weight'],audit['new_weight']),('312','475'))
+            self.assertIn('dispatch',audit['source'])
+        for oid in (old,handed,latest):self.assertEqual(self.load(oid)['calculation']['weight_g'],'475')
+        with p.connection(self.path) as db:
+            order=p.load_order(db,old);order['lines'][0]['purchase_unit']='10'
+            p.save_order(db,order,now=300)
+            self.assertEqual(order['calculation']['weight_g'],'475')
+            order=p.load_order(db,old);order['inputs']['weight_override']='480'
+            p.save_order(db,order,now=400)
+        for oid in (old,handed,latest):self.assertEqual(self.load(oid)['calculation']['weight_g'],'480')
 
 if __name__=='__main__':unittest.main()
