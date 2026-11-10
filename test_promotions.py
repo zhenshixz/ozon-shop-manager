@@ -1,6 +1,8 @@
 import copy
 import datetime as dt
 import json
+import io
+import urllib.error
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +12,58 @@ import promotions as p
 
 
 class PromotionsTests(unittest.TestCase):
+    def test_read_429_honors_retry_after_and_no_write_is_blindly_retried(self):
+        shop=dict(client_id='test',api_key='test')
+        def limited():
+            return urllib.error.HTTPError('https://api-seller.ozon.ru',429,'limit',{'Retry-After':'3'},io.BytesIO())
+        with patch.object(p,'REQUEST_INTERVAL',0),patch.object(p,'_next_request_at',0),patch.object(p.time,'sleep') as sleep:
+            with patch.object(p.urllib.request,'urlopen',side_effect=[limited(),io.BytesIO(b'{"result":[]}')]) as open_request:
+                self.assertEqual(p.api(shop,'/v1/actions'),{'result':[]})
+                self.assertEqual(open_request.call_count,2);sleep.assert_called_once_with(3)
+            sleep.reset_mock()
+            with patch.object(p.urllib.request,'urlopen',side_effect=limited()) as open_request:
+                with self.assertRaises(p.ApiFailure):p.api(shop,p.DELETE,dict(action_id=1))
+                self.assertEqual(open_request.call_count,1);sleep.assert_not_called()
+
+    def test_write_recovery_reads_remaining_and_resends_only_remaining_ids(self):
+        date=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=1)).isoformat()
+        items=[dict(product_id=1),dict(product_id=2)];writes=[];events=[]
+        def fake(shop,path,payload=None):
+            if path=='/v1/actions':return dict(result=[dict(id=123,title='Test',auto_add_dates=[date])])
+            if path==p.READ_LIST:return dict(products=copy.deepcopy(items),total=len(items))
+            writes.append(payload['product_ids'][:])
+            if len(writes)==1:
+                items.pop(0)
+                raise p.ApiFailure(429,4)
+            removed=payload['product_ids'];items[:]=[x for x in items if x['product_id'] not in removed]
+            return dict(product_ids=removed)
+        with patch.object(p.time,'sleep') as sleep:
+            r=p.clean(dict(id='x',name='X'),events.append,lambda _:None,fake)
+            sleep.assert_called_once_with(4)
+        self.assertEqual(writes,[[1,2],[2]])
+        self.assertEqual(r['status'],'ok');self.assertEqual(r['removed'],1)
+        self.assertEqual([x['status'] for x in r['batches'][0]['products']],['verified_absent','removed'])
+        self.assertEqual(events[-1],dict(stage='final-verification',pending=[]))
+
+    def test_retry_exhausted_and_new_arrivals_do_not_report_success(self):
+        date=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=1)).isoformat()
+        reads=0
+        def fake(shop,path,payload=None):
+            nonlocal reads
+            if path=='/v1/actions':return dict(result=[dict(id=123,title='Test',auto_add_dates=[date])])
+            reads+=1
+            return dict(products=[dict(product_id=9)] if reads>1 else [],total=1 if reads>1 else 0)
+        r=p.clean(dict(id='x',name='X'),lambda _:None,lambda _:None,fake)
+        self.assertEqual(r['status'],'error');self.assertEqual(r['pending_final'][0]['total'],1)
+        with patch.object(p,'REQUEST_INTERVAL',0),patch.object(p,'_next_request_at',0),patch.object(p.time,'sleep'),patch.object(p.urllib.request,'urlopen',side_effect=urllib.error.URLError('timeout')) as request:
+            with self.assertRaises(p.ApiFailure):p.api(dict(client_id='test',api_key='test'),'/v1/actions')
+            self.assertEqual(request.call_count,len(p.RETRY_DELAYS)+1)
+
+    def test_wait_longer_than_budget_never_retries_earlier(self):
+        with patch.object(p.time,'sleep') as sleep:
+            with self.assertRaises(ValueError):p.wait_retry(p.ApiFailure(429,900),0)
+            sleep.assert_not_called()
+
     def test_public_access_needs_no_password_but_keeps_request_protection(self):
         from flask import Flask
         with tempfile.TemporaryDirectory() as folder,patch.object(p,'ROOT',Path(folder)),patch.object(p,'launch') as launch:

@@ -1,6 +1,7 @@
 """Official Ozon future-auto-add cleanup; private UI, durable jobs and opt-in timer."""
 import argparse
 import datetime as dt
+from email.utils import parsedate_to_datetime
 import hmac
 import hashlib
 import json
@@ -19,6 +20,40 @@ ROOT = Path(__file__).resolve().parent
 TZ = dt.timezone(dt.timedelta(hours=8))
 READ_LIST = '/v2/actions/auto-add/products/list'
 DELETE = '/v2/actions/auto-add/products/delete'
+RETRY_DELAYS = (2, 4, 8, 16, 32)
+REQUEST_INTERVAL = 1.0
+MAX_RETRY_WAIT = 120
+_next_request_at = 0.0
+
+
+class ApiFailure(ValueError):
+    def __init__(self, code=None, retry_after=None):
+        self.code, self.retry_after = code, retry_after
+        self.retryable = code is None or code == 429 or code >= 500
+        if code == 429: message = 'Ozon接口限流（429），需等待后核对剩余队列'
+        elif self.retryable: message = 'Ozon请求未确认，请核对剩余队列'
+        else: message = f'Ozon接口HTTP {code}，本次处理未完成'
+        super().__init__(message)
+
+
+def retry_seconds(value):
+    if not value: return None
+    try:
+        delay = float(value)
+    except (ValueError, TypeError):
+        try: delay = parsedate_to_datetime(value).timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError): return None
+    return delay if 0 <= delay < float('inf') else None
+
+
+def wait_retry(error, attempt, notify=None, path=''):
+    delay = max(RETRY_DELAYS[attempt], error.retry_after or 0)
+    # Never retry earlier than a long server-requested pause.
+    if delay > MAX_RETRY_WAIT:
+        raise ValueError(f'Ozon要求等待{int(delay)}秒，本轮暂停，请稍后核对剩余队列')
+    if notify: notify(dict(stage='retry-wait', path=path, code=error.code,
+                           seconds=delay, attempt=attempt+1))
+    time.sleep(delay)
 
 
 def shops():
@@ -60,20 +95,31 @@ def plan(c):
     return p
 
 
-def api(shop, path, payload=None):
+def api(shop, path, payload=None, notify=None):
+    global _next_request_at
     if path not in ('/v1/actions', READ_LIST, DELETE):
         raise ValueError('禁止调用其他接口')
     req = urllib.request.Request('https://api-seller.ozon.ru'+path,
         data=json.dumps(payload).encode() if payload is not None else None,
         headers={'Client-Id': str(shop['client_id']), 'Api-Key': shop['api_key'], 'Content-Type': 'application/json'})
-    try:
-        with urllib.request.urlopen(req, timeout=35) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        # Never persist headers, credentials or arbitrary upstream response bodies.
-        raise ValueError(f'Ozon 接口 HTTP {e.code}，请检查凭证权限或稍后重试') from None
-    except Exception:
-        raise ValueError('Ozon 请求未完成；写请求不自动重试，请检查剩余队列') from None
+    for attempt in range(len(RETRY_DELAYS)+1):
+        pause = _next_request_at - time.monotonic()
+        if pause > 0: time.sleep(pause)
+        _next_request_at = time.monotonic() + REQUEST_INTERVAL
+        error = None
+        try:
+            with urllib.request.urlopen(req, timeout=35) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            # Only keep the status and safe rate-limit metadata, never keys/headers/body.
+            error = ApiFailure(e.code, retry_seconds(e.headers.get('Retry-After')))
+            e.close()
+        except (urllib.error.URLError, TimeoutError, OSError):
+            error = ApiFailure()
+        # Writes are recovered in clean() only after reading the remaining queue.
+        if path == DELETE or not error.retryable or attempt == len(RETRY_DELAYS):
+            raise error from None
+        wait_retry(error, attempt, notify, path)
 
 
 def future(value):
@@ -142,10 +188,18 @@ def product_details(run):
     return run
 
 
-def clean(shop, audit, progress, call=api):
+def clean(shop, audit, progress, call=None):
+    result = dict(shop=shop['id'], name=shop['name'], status='running', activities=0,
+                  removed=0, batches=[], error='', notice='', retry_count=0)
+    def notify(event):
+        audit(event)
+        result['retry_count'] += 1
+        result['notice'] = f"接口暂时限流或未响应，等待{event['seconds']:g}秒后核对重试（第{event['attempt']}次）"
+        progress(result)
+    if call is None:
+        call = lambda s, path, payload=None: api(s, path, payload, notify=notify)
     actions = call(shop, '/v1/actions')['result']
-    result = dict(shop=shop['id'], name=shop['name'], status='running', activities=len(actions),
-                  removed=0, batches=[], error='')
+    result['activities'] = len(actions)
     progress(result)
     for action in actions:
         for date in dict.fromkeys(action.get('auto_add_dates') or []):
@@ -163,29 +217,45 @@ def clean(shop, audit, progress, call=api):
                 if ids and not future(date):
                     raise ValueError('计划加入时间已到，未执行删除')
                 for start in range(0, len(ids), 1000):
-                    if not future(date):
-                        raise ValueError('计划加入时间已到，未继续删除')
-                    payload = dict(action_id=action['id'], auto_add_date=date, product_ids=ids[start:start+1000])
-                    audit(dict(stage='delete-prepared', payload=payload))
-                    for item in batch['products'][start:start+1000]:item['status']='unconfirmed'
-                    response = call(shop, DELETE, payload)
-                    audit(dict(stage='delete-response', response=response))
-                    removed = response.get('product_ids', [])
-                    confirmed = len(set(removed) & set(payload['product_ids']))
-                    confirmed_ids=set(removed) & set(payload['product_ids'])
-                    for item in batch['products'][start:start+1000]:
-                        if item['product_id'] in confirmed_ids:item['status']='removed'
-                    batch['removed'] += confirmed
-                    result['removed'] += confirmed
-                    if set(removed) != set(payload['product_ids']):
-                        raise ValueError('接口未确认全部移除，请核对剩余队列')
-                remaining = queue(shop, action['id'], date, call)
+                    pending = ids[start:start+1000]
+                    for attempt in range(len(RETRY_DELAYS)+1):
+                        if not pending: break
+                        if not future(date): raise ValueError('计划加入时间已到，未继续删除')
+                        payload = dict(action_id=action['id'], auto_add_date=date, product_ids=pending)
+                        audit(dict(stage='delete-prepared', payload=payload))
+                        for item in batch['products']:
+                            if item['product_id'] in pending:item['status']='unconfirmed'
+                        try:
+                            response = call(shop, DELETE, payload)
+                        except ApiFailure as error:
+                            if not error.retryable or attempt == len(RETRY_DELAYS): raise
+                            wait_retry(error, attempt, notify, DELETE)
+                            remaining = queue(shop, action['id'], date, call)
+                            remaining_ids = {p['product_id'] for p in remaining}
+                            absent = set(pending) - remaining_ids
+                            for item in batch['products']:
+                                if item['product_id'] in absent:item['status']='verified_absent'
+                            audit(dict(stage='delete-reconciled',action_id=action['id'],date=date,absent_ids=list(absent)))
+                            pending = [pid for pid in pending if pid in remaining_ids]
+                            continue
+                        audit(dict(stage='delete-response', response=response))
+                        removed = response.get('product_ids', [])
+                        confirmed_ids=set(removed) & set(pending)
+                        for item in batch['products']:
+                            if item['product_id'] in confirmed_ids:item['status']='removed'
+                        batch['removed'] += len(confirmed_ids)
+                        result['removed'] += len(confirmed_ids)
+                        if set(removed) != set(pending):
+                            raise ValueError('接口未确认全部移除，请核对剩余队列')
+                        break
+                remaining = queue(shop, action['id'], date, call) if ids else []
                 remaining_ids={p['product_id'] for p in remaining}
                 for item in batch['products']:
                     if item['product_id'] in remaining_ids:item['status']='remaining'
                 batch.update(remaining=len(remaining), status='ok' if not remaining else 'error')
                 if remaining:
                     raise ValueError('仍有待加入商品，需重新检查')
+                result['notice'] = ''
             except Exception as e:
                 batch.update(status='error', error=str(e) if isinstance(e, ValueError) else '接口数据异常，已停止本店处理')
                 result.update(status='error', error=batch['error'])
@@ -197,7 +267,16 @@ def clean(shop, audit, progress, call=api):
     final = call(shop, '/v1/actions')['result']
     expected = {(a['id'], d) for a in actions for d in (a.get('auto_add_dates') or []) if future(d)}
     actual = {(a['id'], d) for a in final for d in (a.get('auto_add_dates') or []) if future(d)}
-    if actual - expected:
+    pending_final = []
+    for action in final:
+        for date in dict.fromkeys(action.get('auto_add_dates') or []):
+            if not future(date): continue
+            remaining = queue(shop, action['id'], date, call)
+            if remaining: pending_final.append((action['id'], date, len(remaining)))
+    audit(dict(stage='final-verification',pending=[dict(action_id=a,date=d,total=n) for a,d,n in pending_final]))
+    if pending_final:
+        result.update(status='error',error='结束核对仍有待加入商品，请检查活动明细',pending_final=[dict(action_id=a,date=d,total=n) for a,d,n in pending_final])
+    elif actual - expected:
         result.update(status='error', error='执行期间出现新的待加入活动批次，请再次运行检查')
     else:
         result['status'] = 'ok'
