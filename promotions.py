@@ -52,7 +52,12 @@ def reconcile(c):
 
 def plan(c):
     row = c.execute("SELECT value FROM settings WHERE owner='self'").fetchone()
-    return json.loads(row[0]) if row else dict(enabled=False, time='09:00', shops=[], last_day='')
+    p = json.loads(row[0]) if row else dict(enabled=False, time='09:00', shops=[], last_day='')
+    p.setdefault('extra_times', [])
+    p['times'] = sorted(set([p['time']] + p['extra_times']))
+    # Legacy last_day describes only the original daily time, not every slot.
+    p.setdefault('last_runs', {p['time']: p.get('last_day', '')})
+    return p
 
 
 def api(shop, path, payload=None):
@@ -285,7 +290,9 @@ def tick():
         c.execute('BEGIN IMMEDIATE')
         reconcile(c)
         p = plan(c); now = dt.datetime.now(TZ)
-        if not p['enabled'] or not p['shops'] or now.strftime('%H:%M') < p['time'] or p.get('last_day') == now.date().isoformat():
+        today = now.date().isoformat()
+        due = [t for t in p['times'] if t <= now.strftime('%H:%M') and p['last_runs'].get(t) != today]
+        if not p['enabled'] or not p['shops'] or not due:
             return
         if c.execute("SELECT 1 FROM runs WHERE status IN ('queued','running')").fetchone():
             return
@@ -293,7 +300,9 @@ def tick():
         rid = secrets.token_hex(12)
         c.execute('INSERT INTO runs(id,owner,created,status,source,shops) VALUES(?,?,?,?,?,?)',
                   (rid,'self',time.time(),'queued','schedule',json.dumps(ids)))
-        p['last_day'] = now.date().isoformat()
+        # If a restart missed several slots, one full sweep covers all overdue slots.
+        p['last_runs'].update({t: today for t in due})
+        p['last_day'] = today
         c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', ('self', json.dumps(p)))
     worker(rid)
 
@@ -392,9 +401,16 @@ def register(app):
             raise ValueError('请选择有效店铺')
         with db() as c:
             p=plan(c)
-            if data['enabled'] and (not p['enabled'] or p['time']!=data['time']):
-                now=dt.datetime.now(TZ)
-                p['last_day']=now.date().isoformat() if now.strftime('%H:%M')>=data['time'] else ''
+            if data['time'] in p['extra_times']:
+                raise ValueError('执行时间不能与晚间补清时间重复')
+            new_times=sorted(set([data['time']]+p['extra_times']))
+            now=dt.datetime.now(TZ)
+            last_runs={t:d for t,d in p['last_runs'].items() if t in new_times}
+            if data['enabled']:
+                for t in new_times:
+                    if (not p['enabled'] or t not in p['times']) and t<=now.strftime('%H:%M'):
+                        last_runs[t]=now.date().isoformat()
+            p.update(last_runs=last_runs,times=new_times)
             p.update(enabled=data['enabled'], time=data['time'], shops=list(dict.fromkeys(ids)))
             c.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',('self',json.dumps(p)))
         return jsonify(ok=True)

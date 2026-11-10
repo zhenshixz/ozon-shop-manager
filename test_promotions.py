@@ -136,5 +136,59 @@ class PromotionsTests(unittest.TestCase):
             p.tick()
             self.assertEqual(worker.call_count,1)
 
+    def test_two_slots_each_run_once_and_legacy_morning_does_not_skip_evening(self):
+        class Clock(dt.datetime):
+            current = dt.datetime(2026,11,11,12,11,tzinfo=p.TZ)
+            @classmethod
+            def now(cls, tz=None): return cls.current
+        with tempfile.TemporaryDirectory() as folder,patch.object(p,'ROOT',Path(folder)),patch.object(p,'worker') as worker,patch.object(p.dt,'datetime',Clock):
+            def completed(rid):
+                with p.db() as c:c.execute("UPDATE runs SET status='ok' WHERE id=?",(rid,))
+            worker.side_effect=completed
+            with p.db() as c:
+                value=dict(enabled=True,time='12:12',extra_times=['20:00'],shops=['selected-only'],last_day='2026-11-10')
+                c.execute('INSERT INTO settings VALUES(?,?)',('self',json.dumps(value)))
+            p.tick();self.assertEqual(worker.call_count,0)
+            Clock.current=Clock.current.replace(hour=12,minute=12)
+            p.tick();p.tick();self.assertEqual(worker.call_count,1)
+            Clock.current=Clock.current.replace(hour=19,minute=59)
+            p.tick();self.assertEqual(worker.call_count,1)
+            Clock.current=Clock.current.replace(hour=20,minute=0)
+            p.tick();p.tick();self.assertEqual(worker.call_count,2)
+            with p.db() as c:
+                self.assertEqual(p.plan(c)['last_runs'],{'12:12':'2026-11-11','20:00':'2026-11-11'})
+                self.assertTrue(all(json.loads(r[0])==['selected-only'] for r in c.execute('SELECT shops FROM runs')))
+
+    def test_enabling_after_both_times_skips_today_and_saving_preserves_evening(self):
+        from flask import Flask
+        class Clock(dt.datetime):
+            @classmethod
+            def now(cls, tz=None): return cls(2026,11,10,21,0,tzinfo=p.TZ)
+        with tempfile.TemporaryDirectory() as folder,patch.object(p,'ROOT',Path(folder)),patch.object(p,'worker') as worker,patch.object(p.dt,'datetime',Clock):
+            root=Path(folder)
+            (root/'config.json').write_text(json.dumps(dict(shops=[dict(id='only',name='Test')])) )
+            (root/'promo-access.json').write_text(json.dumps(dict(public_access=True)))
+            with p.db() as c:c.execute('INSERT INTO settings VALUES(?,?)',('self',json.dumps(dict(enabled=False,time='12:12',extra_times=['20:00'],shops=['only'],last_day=''))))
+            app=Flask(__name__);app.secret_key='test';p.register(app)
+            client=app.test_client();csrf=client.get('/ozon-profit/promotions/api/state').json['csrf']
+            response=client.post('/ozon-profit/promotions/api/plan',json=dict(enabled=True,time='12:12',shops=['only']),headers={'X-CSRF-Token':csrf})
+            self.assertEqual(response.status_code,200)
+            p.tick();worker.assert_not_called()
+            with p.db() as c:
+                value=p.plan(c)
+                self.assertEqual(value['times'],['12:12','20:00'])
+                self.assertEqual(value['last_runs'],{'12:12':'2026-11-10','20:00':'2026-11-10'})
+
+    def test_missed_slots_coalesce_to_one_sweep(self):
+        class Clock(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):return cls(2026,11,11,21,0,tzinfo=p.TZ)
+        with tempfile.TemporaryDirectory() as folder,patch.object(p,'ROOT',Path(folder)),patch.object(p,'worker') as worker,patch.object(p.dt,'datetime',Clock):
+            with p.db() as c:c.execute('INSERT INTO settings VALUES(?,?)',('self',json.dumps(dict(enabled=True,time='12:12',extra_times=['20:00'],shops=['only'],last_day=''))))
+            p.tick()
+            self.assertEqual(worker.call_count,1)
+            with p.db() as c:
+                self.assertEqual(p.plan(c)['last_runs'],{'12:12':'2026-11-11','20:00':'2026-11-11'})
+
 
 if __name__=='__main__':unittest.main()
