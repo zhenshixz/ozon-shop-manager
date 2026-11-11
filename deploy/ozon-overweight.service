@@ -1,0 +1,20 @@
+[Unit]
+Description=Ozon daily product-weight review scan (no automatic archiving)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ozon-monitor
+Group=ozon-monitor
+WorkingDirectory=/opt/ozon-push-monitor
+ExecStart=/usr/bin/python3.11 -B /opt/ozon-push-monitor/overweight_worker.py --tick
+UMask=0077
+Nice=10
+MemoryMax=192M
+CPUQuota=25%
+TimeoutStartSec=3600
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ozon-push-monitor/data
+

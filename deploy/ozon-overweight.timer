@@ -1,0 +1,11 @@
+[Unit]
+Description=Dispatch daily weight scan ahead of the existing product digest
+
+[Timer]
+OnCalendar=*-*-* *:00/5:00
+AccuracySec=15s
+Persistent=true
+Unit=ozon-overweight.service
+
+[Install]
+WantedBy=timers.target

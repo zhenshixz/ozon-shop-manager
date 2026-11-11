@@ -10,6 +10,10 @@
 
 ## 最近的重要变更
 
+- [2026-11-11 统一运营后台、超重排查及阈值次日生效](../MAINTENANCE-20261111-OPERATIONS-HUB.md)
+
+- [2026-11-11 运营后台入口与每日超重排查规划（尚未开发）](PLAN-20261111-OPERATIONS-HUB-OVERWEIGHT.md)
+
 - [采购价与实称导入：本地模拟页面与真实Excel流程验证（未上线）](../MAINTENANCE-20261108-IMPORT-SANDBOX.md)
 
 - [妙手采购成本接入：主/子账号权限、官方API缺口与批量导入评估（未开发）](RESEARCH-20261108-MIAOSHOU-PURCHASE-COST.md)

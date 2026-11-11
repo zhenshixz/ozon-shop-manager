@@ -219,6 +219,8 @@ def create_app(settings=None):
 
     import promotions
     promotions.register(app)
+    import ops_web
+    ops_web.register(app,settings,database)
     @app.get(PREFIX+'/api/product-status')
     def status_snapshots():
         allowed={s['id'] for s in configured_shops}

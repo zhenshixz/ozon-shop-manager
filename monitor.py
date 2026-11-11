@@ -538,6 +538,12 @@ class Store:
                     note = "（采集异常或未更新，数量可能不完整）" if stale else ""
                     lines.append(f"【{name}】上新 {count} 件{note}")
                 lines += ["", f"全部店铺合计：{len(rows)} 件。", "如有未发送积压记录，一并计入本次汇总。"]
+                # Independent scan results only; never call product APIs in the notifier.
+                try:
+                    import overweight
+                    lines += overweight.digest_lines(self.directory/'overweight.sqlite3',cutoff)
+                except Exception:
+                    LOG.exception('读取超重检查摘要失败；上新汇总照常发送')
                 self.queue_message(db, title, lines, now, rows, kind='product-digest')
                 self.put(db, "digest:next-cutoff", cutoff+86400)
 
