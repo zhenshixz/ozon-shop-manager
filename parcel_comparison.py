@@ -52,7 +52,8 @@ def split_charges(lines, plan, forwarding, rate_override=None):
 def compare(db, order, trial_weights=None):
     lines = order['lines']
     quantities = [line['quantity'] for line in lines]
-    if quantities not in ([2], [3], [1, 1]) or order['source'] != 'fbs':
+    same_product = len(quantities)==1 and 2<=quantities[0]<=6
+    if (not same_product and quantities != [1, 1]) or order['source'] != 'fbs':
         return None
     if not order['calculation']['included_in_summary'] or has_sibling(db,order):
         return None
@@ -102,12 +103,20 @@ def compare(db, order, trial_weights=None):
 
     def add_split_package(key, label, line, quantity):
         ref = core.default_measured_weight(db,order['shop'],quantity,line['offer_id'],line['sku'],order['id'])
-        if ref:
-            weight, source = ref['weight_override'], '单件实称推算' if ref['origin']=='scaled' else '同件数历史实称'
-        elif line.get('weight_g') not in (None, ''):
-            weight, source = core.D(line['weight_g']) * quantity, 'API 估重'
+        if (same_product and base['weight_source']=='custom' and inputs.get('weight_origin')!='shape_changed'
+                and base['weight_g'] is not None and 0<core.D(base['weight_g'])<=25000
+                and not (ref and inputs.get('weight_origin') in ('inherited','scaled')
+                         and core.D(ref['weight_override'])==core.D(base['weight_g'])/quantities[0]*quantity)):
+            weight = core.D(base['weight_g']) / core.D(quantities[0]) * quantity
+            source = '本单整包重量推算'
+            ref = None
         else:
-            weight, source = None, '待补重量'
+            if ref:
+                weight, source = ref['weight_override'], '单件实称推算' if ref['origin']=='scaled' else '同件数历史实称'
+            elif line.get('weight_g') not in (None, ''):
+                weight, source = core.D(line['weight_g']) * quantity, 'API 估重'
+            else:
+                weight, source = None, '待补重量'
         add_package(key, label, [dict(line, quantity=quantity)], weight, source,
                     reference_posting=ref['posting'] if ref else None)
 
@@ -122,8 +131,8 @@ def compare(db, order, trial_weights=None):
                 repeated = f'{key}-{index}'
                 package = packages[key]
                 items = [dict(by_key[line_key],quantity=qty) for line_key,qty in package['shape']]
-                source = 'API 估重' if package['source']=='API 估重' else '同首包重量'
-                add_package(repeated,f'第 {index} 包',items,package['weight'],source)
+                source = package['source'] if package['source']=='API 估重' or '推算' in package['source'] else '同首包重量'
+                add_package(repeated,f"{package['label']} · 第 {index} 包",items,package['weight'],source)
                 parcels.append(repeated)
         cost = platform_fee = total_cost = None
         if all(key in exact for key in parcels):
@@ -139,13 +148,21 @@ def compare(db, order, trial_weights=None):
         add_split_package('two', '商品 2 单独发', lines[1], 1)
         add_plan('两款各发 1 包', [('one', 1), ('two', 1)])
     else:
-        add_split_package('one', '1 件装一包', lines[0], 1)
-        if quantities == [3]:
-            add_split_package('two', '2 件装一包', lines[0], 2)
-            add_plan('拆 2 包 · 2+1', [('two', 1), ('one', 1)])
-            add_plan('拆 3 包 · 1+1+1', [('one', 3)])
-        else:
-            add_plan('拆 2 包 · 1+1', [('one', 2)])
+        quantity=quantities[0]
+        keys={1:'one',2:'two',3:'three',4:'four',5:'five'}
+        for count in range(1,quantity):
+            add_split_package(keys[count],f'{count} 件装一包',lines[0],count)
+        # At most 10 split alternatives for six pieces; preserve the old 2/3-piece indices.
+        def partitions(remaining, maximum):
+            if remaining==0:
+                yield ()
+            else:
+                for count in range(min(remaining,maximum),0,-1):
+                    for rest in partitions(remaining-count,count):
+                        yield (count,)+rest
+        for combination in partitions(quantity,quantity-1):
+            parts=[(keys[count],repeats) for count,repeats in Counter(combination).items()]
+            add_plan(f"拆 {len(combination)} 包 · {'+'.join(map(str,combination))}",parts)
 
     best = spread = None
     if all(plan['total_cost'] is not None for plan in plans):

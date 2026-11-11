@@ -197,6 +197,25 @@ class ProfitTest(unittest.TestCase):
         self.assertEqual(payload['template'],'html')
         self.assertIn('&lt;product&gt;',payload['content'])
         self.assertIn('<a href="https://example.test/#k=secret">',payload['content'])
+    def test_main_status_filter_before_limit_and_cancelled_aliases(self):
+        posts=[]
+        for i in range(505):
+            post=copy.deepcopy(self.post)
+            post.update(posting_number='FILTER-'+str(i),order_id=100+i,
+                        status='awaiting_packaging' if i==0 else 'canceled' if i==1 else 'cancelled' if i==2 else 'delivered')
+            posts.append(post)
+        with p.connection(self.path) as db:
+            p.capture_postings(db,self.shop,'fbs',posts,time.time())
+        app=create_app({'database':str(self.path),'secret_key':'test','secure_cookie':False,'public_access':True})
+        client=app.test_client();url='/ozon-profit/api/orders'
+        self.assertEqual(len(client.get(url).json['orders']),500)
+        waiting=client.get(url+'?status=awaiting_packaging').json['orders']
+        self.assertEqual([o['posting'] for o in waiting],['FILTER-0'])
+        cancelled=client.get(url+'?status=cancelled').json['orders']
+        self.assertEqual({o['status'] for o in cancelled},{'canceled','cancelled'})
+        self.assertEqual(client.get(url+'?status=unknown').status_code,400)
+        self.assertEqual(client.get(url+'?status=awaiting_packaging&shop=other').json['orders'],[])
+
     def test_public_access_without_login_and_normal_preview(self):
         app=create_app({'database':str(self.path),'access_token':'test-token','secret_key':'test-key','secure_cookie':False,'public_access':True})
         client=app.test_client();prefix='/ozon-profit/api'
@@ -344,6 +363,72 @@ class ProfitTest(unittest.TestCase):
         compass=client.get(prefix+'/analytics?q=RATE').json
         self.assertEqual(compass['summary']['profit'],'-1.62')
         self.assertEqual(compass['products'][0]['profit'],'-1.62')
+
+    def test_two_through_six_parcel_partitions_preserve_legacy_choices(self):
+        import parcel_comparison as pc
+        counts={2:2,3:3,4:5,5:7,6:11}
+        with p.connection(self.path) as db:
+            for qty,count in counts.items():
+                order=copy.deepcopy(self.order);order['lines'][0]['quantity']=qty
+                result=pc.compare(db,order)
+                self.assertEqual(len(result['plans']),count)
+                combinations=[]
+                for plan in result['plans']:
+                    parts=[sum(n for key,n in result['packages'][part['key']]['shape']) for part in plan['parts']]
+                    self.assertEqual(sum(parts),qty)
+                    combinations.append(tuple(sorted(parts,reverse=True)))
+                self.assertEqual(len(set(combinations)),count)
+                if qty==3:self.assertEqual(combinations,[(3,),(2,1),(1,1,1)])
+                if qty==6:
+                    self.assertEqual(set(combinations),{(6,),(5,1),(4,2),(4,1,1),(3,3),(3,2,1),
+                        (3,1,1,1),(2,2,2),(2,2,1,1),(2,1,1,1,1),(1,1,1,1,1,1)})
+            order['lines'][0]['quantity']=7
+            self.assertIsNone(pc.compare(db,order))
+
+    def test_six_parcel_preview_confirmation_and_persistence(self):
+        self.post.update(posting_number='SIX-1',order_number='SIX')
+        self.post['products'][0].update(quantity=6,weight=.4,price={'amount':'34','currency':'CNY'})
+        with p.connection(self.path) as db:
+            p.capture_postings(db,self.shop,'fbs',[self.post],time.time())
+            o=p.load_order(db,2);o['lines'][0]['purchase_unit']='10';o['inputs']['weight_override']='1200'
+            p.save_order(db,o)
+        app=create_app({'database':str(self.path),'secret_key':'test','secure_cookie':False,'public_access':True})
+        client=app.test_client();prefix='/ozon-profit/api';url=prefix+'/orders/2'
+        headers={'X-CSRF-Token':client.get(prefix+'/bootstrap').json['csrf']}
+        order=client.get(url).json['order'];comparison=order['parcel_comparison']
+        self.assertEqual(order['calculation']['profit'],'62.80')
+        self.assertEqual(p.D(comparison['packages']['one']['default_weight']),200)
+        self.assertEqual(comparison['packages']['one']['source'],'本单整包重量推算')
+        choice=next(i for i,plan in enumerate(comparison['plans']) if plan['label']=='拆 3 包 · 2+2+2')
+        for part in comparison['plans'][choice]['parts']:
+            pack=comparison['packages'][part['key']]
+            self.assertEqual(p.D(pack['weight']),400)
+            self.assertEqual(pack['source'],'本单整包重量推算')
+            self.assertIsNone(pack['reference_posting'])
+        self.assertEqual(comparison['plans'][choice]['total_cost'],'72.90')
+        body={'lines':[{'id':order['lines'][0]['id'],'purchase_unit':'10'}],'inputs':{},
+              'dispatch_choice':choice,'parcel_weights':{},'weight_mode':'custom','weight_confirmed':True,
+              'expected_api_weight_g':order['calculation']['api_weight_g'],
+              'expected_weight_override':order['inputs']['weight_override']}
+        body['inputs']['weight_override']=order['inputs']['weight_override']
+        pending=client.post(url+'/preview',json=body,headers=headers).json['order']
+        self.assertTrue(pending['calculation']['dispatch_pending'])
+        self.assertEqual(client.post(url,json=body,headers=headers).status_code,400)
+        body['parcel_weights']={'two':'400'}
+        preview=client.post(url+'/preview',json=body,headers=headers).json['order']
+        # 3 packages: (2.9 + .0247*400) freight + 2 forwarding + 68*.14 fee each.
+        self.assertEqual(preview['calculation']['shipping'],'38.34')
+        self.assertEqual(preview['calculation']['platform_fee'],'28.56')
+        self.assertEqual(preview['calculation']['forwarder'],'6.00')
+        self.assertEqual(preview['calculation']['profit'],'71.10')
+        self.assertIsNone(client.get(url).json['order']['dispatch_plan'])
+        body['parcel_weights']['two-2']='410'
+        saved=client.post(url,json=body,headers=headers).json['order']
+        self.assertEqual(saved['calculation']['profit'],'70.85')
+        self.assertEqual([x['weight'] for x in saved['dispatch_plan']['packages']],['400','410','400'])
+        self.assertEqual(client.get(url).json['order']['calculation']['profit'],'70.85')
+        stats=client.get(prefix+'/analytics?q=SIX').json['summary']
+        self.assertEqual(stats['profit'],'70.85');self.assertEqual(stats['packages'],3)
 
     def test_auth_csrf_preview_save_and_persistence(self):
         app=create_app({'database':str(self.path),'access_token':'test-token','secret_key':'test-key','secure_cookie':False});app.testing=True

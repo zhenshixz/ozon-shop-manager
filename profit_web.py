@@ -10,9 +10,10 @@ import time
 from flask import Flask, request, session, jsonify, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 import profit_core as core
-import recent_sales
 import parcel_comparison
 import product_status
+import profit_sync
+import recent_sales
 
 PREFIX = '/ozon-profit'
 ROOT = Path(__file__).parent
@@ -149,12 +150,26 @@ def create_app(settings=None):
                 ','.join('?' for _ in ids)+')',ids).fetchall()
         return jsonify(images=[dict(row) for row in rows])
 
+    @app.get(PREFIX+'/api/order-status-version')
+    def order_status_version():
+        with core.connection(database) as db:
+            version=profit_sync.status_version(db,request.args.get('shop',''))
+        return jsonify(version=version)
+
     @app.get(PREFIX+'/api/orders')
     def orders():
         query='SELECT id FROM profit_orders WHERE 1=1'
         args=[]
         if request.args.get('shop'):
             query+=' AND shop=?'; args.append(request.args['shop'])
+        status=request.args.get('status','')
+        if status:
+            if status not in core.STATUS_LABELS:
+                raise ValueError('订单主状态不正确')
+            if status in ('cancelled','canceled'):
+                query+=" AND lower(status) IN ('cancelled','canceled')"
+            else:
+                query+=' AND lower(status)=?'; args.append(status)
         if request.args.get('date'):
             try:
                 start=dt.datetime.strptime(request.args['date'],'%Y-%m-%d').replace(tzinfo=dt.timezone(dt.timedelta(hours=8))).timestamp()
@@ -162,6 +177,8 @@ def create_app(settings=None):
             query+=' AND created>=? AND created<?'; args.extend([start,start+86400])
         query+=' ORDER BY created DESC,id DESC LIMIT 500'
         with core.connection(database) as db:
+            db.execute('BEGIN')
+            version=profit_sync.status_version(db,request.args.get('shop',''))
             result=[core.load_order(db,r['id']) for r in db.execute(query,args).fetchall()]
             recent_sales.annotate(db,result)
         search=request.args.get('q','').lower().strip()
@@ -170,7 +187,7 @@ def create_app(settings=None):
         state=request.args.get('state','')
         if state: result=[o for o in result if o['calculation']['status']==state]
         product_status.annotate_orders(result)
-        return jsonify(orders=result,limit=500)
+        return jsonify(orders=result,limit=500,status_version=version)
 
     @app.route(PREFIX+'/api/orders/<int:order_id>',methods=['GET','POST'])
     @app.post(PREFIX+'/api/orders/<int:order_id>/preview')

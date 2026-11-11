@@ -1,5 +1,6 @@
 {
   "poll_seconds": 300,
+  "status_poll_seconds": 30,
   "product_poll_seconds": 900,
   "order_push_seconds": 1200,
   "product_digest_hour": 22,

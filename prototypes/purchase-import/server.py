@@ -101,7 +101,7 @@ class Sandbox:
                     used[key]['changes'] = []
                     raise ValueError('同一店铺／订单／商品在文件中重复，需整理后重试')
                 used[key] = e
-                value = record['采购金额(产品-RMB)']
+                value = record['采购金额(产品-RMB)'].strip()
                 if value:
                     total = decimal(value, True)
                     unit = total / D(l['quantity'])
@@ -112,7 +112,7 @@ class Sandbox:
                             new=str(total), value=str(unit), origin=l.get('purchase_origin', ''), label='采购合计'))
                     else: e['notes'].append('采购金额相同')
                 else: e['notes'].append('采购金额为空，保留原值')
-                note = record['本地备注']
+                note = record['本地备注'].strip()
                 m = re.fullmatch(r'(\d+(?:\.\d+)?)\s*(?:g|克)', note, re.I)
                 if m:
                     weight = decimal(m[1], True)
@@ -200,8 +200,9 @@ def bulk_demo(calculate, count=2000):
         o['calculation'] = calculate(o)
         orders.append(o)
         records.append(dict(row=i+2, **{'店铺名称':shop,'订单编号':posting,'平台SKU':offer,
-            '产品数量':str(qty+1 if i%100==99 else qty),'采购金额(产品-RMB)':str(D('15.20')*qty),
-            'SKU ID':sku,'本地备注':weight+'g'}))
+            '产品数量':str(qty+1 if i%100==99 else qty),
+            '采购金额(产品-RMB)':'' if i%100 in (2,3) else str(D('15.20')*qty),
+            'SKU ID':sku,'本地备注':('' if i%100 in (1,3) else '11-03:6-2' if i%100==4 else weight+'g')}))
     return Sandbox(dict(orders=orders), calculate), records
 
 def main():

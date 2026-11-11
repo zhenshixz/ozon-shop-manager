@@ -1,8 +1,8 @@
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const demo = new URLSearchParams(location.search).get('demo') === '1';
-const yuan = v => v == null ? '—' : `¥${Number(v).toFixed(2)}`;
-const grams = v => v == null ? '—' : Number(v).toLocaleString('zh-CN');
+const yuan = v => v == null ? '—' : Number.isFinite(Number(v)) ? `¥${Number(v).toFixed(2)}` : esc(v);
+const grams = v => v == null ? '—' : Number.isFinite(Number(v)) ? Number(v).toLocaleString('zh-CN') : esc(v);
 let state, initial, preview, selected = new Set(), projected, projectionSeq = 0;
 let page = 1, size = 50, tab = 'changed', orderPage = 1, projecting = false, busy = false;
 let orderMap = new Map(), initialMap = new Map(), projectedMap = new Map(), changeMap = new Map();
@@ -16,10 +16,12 @@ function image(url) { try { const u=new URL(url); return u.protocol==='https:'?e
 function setState(s) { state=s; orderMap=new Map(s.orders.map(o=>[o.id,o])); }
 function rowChanges(e) { return e.error ? [] : e.changes; }
 function manual(e) { return rowChanges(e).some(c=>c.origin==='manual'); }
+function missing(e) { return !e.source['采购金额(产品-RMB)'].trim() || !/^(\d+(?:\.\d+)?)\s*(?:g|克)$/i.test(e.source['本地备注'].trim()); }
 function rowStatus(e) { return e.error?'error':e.changes.length?'changed':'skipped'; }
 function satisfies(e, type) {
  if (type==='all') return true;
  if (type==='manual') return manual(e);
+ if (type==='missing') return missing(e);
  if (type==='unselected') return rowChanges(e).some(c=>!selected.has(c.id));
  return rowStatus(e)===type;
 }
@@ -51,13 +53,19 @@ function valueCells(e, kind) {
  let proposed=kind==='cost'?e.source['采购金额(产品-RMB)']:null;
  if(kind==='weight') proposed=/^(\d+(?:\.\d+)?)\s*(?:g|克)$/i.exec(e.source['本地备注'])?.[1];
  const display=c?c.new:proposed;
+ if(display==null || String(display).trim()==='') {
+  const unrecognized=kind==='weight'&&e.source['本地备注'].trim();
+  const hint=current==null?'仍待填写':'保留原值';
+  const tip=unrecognized?'备注不是独立的重量，保留当前重量；备注：'+e.source['本地备注']:'该字段为空，不更新、不清零；当前数据及来源保持不变';
+  return `<td class="number original">${fmt(current)}</td><td class="number proposed" title="${esc(tip)}"><span class="kept-value">${unrecognized?'未识别重量':'未提供'}</span><small class="kept-hint">${hint}</small></td>`;
+ }
  const tooltip=kind==='cost'&&c?`采购合计 ${yuan(c.new)}，${e.quantity} 件，单价 ¥${Number(c.value)}`:e.notes.join('；');
  return `<td class="number original">${fmt(current)}</td><td class="number proposed ${c?'has-change':''} ${c&&!selected.has(c.id)?'muted-change':''}" title="${esc(tooltip)}"><div class="cell-select">${checkCell(c,e)}<span>${display==null||display===''?'—':fmt(display)}</span>${!c&&display!=null&&display!==''?'<span class="equal-mark">·</span>':''}</div></td>`;
 }
 function renderRow(e) {
  const ids=rowChanges(e).map(c=>c.id), num=ids.filter(id=>selected.has(id)).length;
  const o=projectedMap.get(e.order_id)||orderMap.get(e.order_id), profit=o?.calculation.profit;
- const status=e.error?'异常':e.changes.length?(num?'待更新':'未勾选'):'无变更';
+ const status=e.error?'异常':e.changes.length?(num?'待更新':'未勾选'):missing(e)?'保留原值':'无变更';
  const note=e.error||e.notes.join('；')||(manual(e)?'将替换人工核算值':'精确匹配');
  return `<tr data-row="${e.row}" class="${e.error?'error-row':''}"><td class="frozen f-check"><input type="checkbox" data-row-select="${e.row}" aria-label="选择第 ${e.row} 行" ${num===ids.length&&ids.length?'checked':''} ${!ids.length||busy?'disabled':''}></td><td class="frozen f-shop"><span class="shop-tag">${esc(e.shop||e.source['店铺名称'])}</span></td><td class="frozen f-order"><button class="posting" data-copy="${esc(e.posting||e.source['订单编号'])}">${esc(e.posting||e.source['订单编号'])} <span>⧉</span></button><small>表格第 ${e.row} 行</small></td><td class="frozen f-product">${productCell(e)}</td><td class="sku-cell" title="${esc(e.sku||e.source['SKU ID'])}">${esc(e.sku||e.source['SKU ID'])}</td><td class="number">${esc(e.quantity||e.source['产品数量'])}</td>${valueCells(e,'cost')}${valueCells(e,'weight')}<td class="number original">${yuan(e.old_profit)}</td><td class="number ${Number(profit)<0?'loss':'gain'}">${projecting?'…':yuan(profit)}</td><td class="status-cell"><span class="row-status ${e.error?'bad':num?'ready':''}">${status}</span><small title="${esc(note)}">${esc(note)}</small></td></tr>`;
 }
@@ -70,7 +78,7 @@ function summary() {
  $('#clear').disabled=busy; $('#clear').textContent=selected.size?'取消所有勾选':'勾选全部有效变更';
 }
 function showPreview(resetScroll=false) {
- const labels={changed:'有变更',manual:'覆盖人工值',unselected:'未勾选',skipped:'无变更',error:'异常',all:'全部'};
+ const labels={changed:'有变更',manual:'覆盖人工值',missing:'有空值 / 未标重',unselected:'未勾选',skipped:'无变更',error:'异常',all:'全部'};
  $('#tabs').innerHTML=Object.entries(labels).map(([k,v])=>`<button data-tab="${k}" class="${tab===k?'active':''}" aria-pressed="${tab===k}">${v}<b>${preview.entries.filter(e=>satisfies(e,k)).length.toLocaleString()}</b></button>`).join('');
  const list=filtered(), pages=Math.max(1,Math.ceil(list.length/size)); page=Math.min(page,pages);
  const slice=list.slice((page-1)*size,page*size), x=$('#changes').scrollLeft, y=$('#changes').scrollTop;

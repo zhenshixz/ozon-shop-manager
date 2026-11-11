@@ -115,18 +115,24 @@ function syncShopPicker(selectId){
   const curOpt=opts.find(o=>o.value===sel.value)||opts[0];
   const hasShop=Boolean(sel.value);
   const isCompass=selectId==='cp-shop';
+  const isStatus=selectId==='order-status-filter';
   wrap.classList.toggle('has-selection',hasShop);
   btn.innerHTML=`<span class="shop-picker-label"><svg class="shop-picker-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3.2 7.8V15h11.6V7.8M2.2 7.8l1.5-4.3h10.6l1.5 4.3M2.2 7.8c0 2 3.4 2 3.4 0 0 2 3.4 2 3.4 0 0 2 3.4 2 3.4 0 0 2 3.4 2 3.4 0M7.2 15v-4.2h3.6V15" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="shop-picker-text">${esc(curOpt?.textContent||'全部店铺')}</span></span><i class="shop-picker-chevron" aria-hidden="true"></i>`;
   const shopOpts=opts.filter(o=>o.value!=='');
-  const allLabel=isCompass&&shopContext?'全部店铺（返回店铺榜）':'全部店铺';
+  if(isStatus){
+    btn.querySelector('.shop-picker-text').textContent=curOpt?.textContent||'全部状态';
+    btn.querySelector('.shop-picker-icon').innerHTML='<path d="M5 4h10M5 9h10M5 14h10M2 4h.1M2 9h.1M2 14h.1" stroke-linecap="round"/>';
+  }
+  btn.setAttribute('aria-label',(isStatus?'订单主状态：':'店铺：')+(curOpt?.textContent||''));
+  const allLabel=isStatus?'全部状态':isCompass&&shopContext?'全部店铺（返回店铺榜）':'全部店铺';
   const checkSvg=`<svg class="shop-pop-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M3.5 8.2l3 3 6-6.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   pop.innerHTML=`
-    <div class="shop-pop-head"><span>选择店铺</span><small>共 ${shopOpts.length} 家店铺</small></div>
+    <div class="shop-pop-head"><span>${isStatus?'选择主状态':'选择店铺'}</span><small>共 ${shopOpts.length} ${isStatus?'种状态':'家店铺'}</small></div>
     <button type="button" class="shop-pop-all ${!hasShop?'active':''}" data-shop-val="" role="option" aria-selected="${!hasShop}">
       <span class="shop-pop-all-left"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></svg><span>${esc(allLabel)}</span></span>
-      ${!hasShop?checkSvg:'<span class="shop-pop-all-hint">汇总全部</span>'}
+      ${!hasShop?checkSvg:`<span class="shop-pop-all-hint">${isStatus?'不限状态':'汇总全部'}</span>`}
     </button>
-    <div class="shop-pop-grid" role="listbox" aria-label="店铺列表">
+    <div class="shop-pop-grid" role="listbox" aria-label="${isStatus?'主状态列表':'店铺列表'}">
       ${shopOpts.map(o=>{
         const active=o.value===sel.value;
         const cnt=isCompass&&shopCounts[o.value]!=null?shopCounts[o.value]:null;
@@ -141,6 +147,7 @@ function syncShopPicker(selectId){
       e.stopPropagation();
       const val=item.dataset.shopVal;
       closeAllShopPickers();
+      btn.focus({preventScroll:true});
       if(sel.value===val)return;
       sel.value=val;
       syncShopPicker(selectId);
@@ -160,8 +167,11 @@ function initShopPicker(selectId){
     wrap.append(sel);
   }
   wrap.classList.add('shop-picker-wrap');
+  if(selectId==='order-status-filter')wrap.classList.add('home-status-select-wrap');
   wrap.dataset.pickerFor=selectId;
   sel.classList.add('sr-only');
+  sel.tabIndex=-1;
+  sel.setAttribute('aria-hidden','true');
   const btn=document.createElement('button');
   btn.type='button';
   btn.className='shop-picker-btn';
@@ -171,6 +181,7 @@ function initShopPicker(selectId){
   const pop=document.createElement('div');
   pop.className='shop-picker-pop';
   pop.id=selectId+'-pop';
+  btn.setAttribute('aria-controls',pop.id);
   pop.hidden=true;
   wrap.append(btn,pop);
   btn.onclick=e=>{
@@ -184,12 +195,28 @@ function initShopPicker(selectId){
     btn.setAttribute('aria-expanded',String(opening));
   };
   pop.onclick=e=>e.stopPropagation();
+  btn.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'){
+      e.preventDefault();if(pop.hidden)btn.click();
+      (pop.querySelector('[aria-selected="true"]')||pop.querySelector('[data-shop-val]'))?.focus();
+    }
+  });
+  pop.addEventListener('keydown',e=>{
+    const items=[...pop.querySelectorAll('[data-shop-val]')];
+    const index=items.indexOf(document.activeElement);
+    if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){
+      e.preventDefault();
+      items[e.key==='Home'?0:e.key==='End'?items.length-1:(index+(e.key==='ArrowDown'?1:-1)+items.length)%items.length]?.focus();
+    }
+    if(e.key==='Escape')btn.focus({preventScroll:true});
+  });
   sel.addEventListener('change',()=>syncShopPicker(selectId));
   syncShopPicker(selectId);
 }
 
 initShopPicker('cp-shop');
 initShopPicker('shop');
+initShopPicker('order-status-filter');
 
 function fitCompassSummary(){
   if(panel.hidden)return;

@@ -7,7 +7,7 @@
 <section class="upload card"><div class="file-icon">↥</div><div><h2>导入妙手导出的 Excel</h2><p id="filename">采购金额按商品行合计 · 备注按整包实称（如 854g）</p></div><label class="primary file-label">选择 Excel<input id="file" type="file" accept=".xlsx"></label></section>
 <div id="notice" role="status" hidden></div>
 <section id="review" class="card" hidden>
-<div class="section-head"><div><h2>核对导入明细 <span id="count" class="badge"></span></h2><p>每行对应一个订单商品；蓝色为新值，橙色提示人工核算覆盖。</p></div><button id="clear" class="text-button">取消所有勾选</button></div>
+<div class="section-head"><div><h2>核对导入明细 <span id="count" class="badge"></span></h2><p>蓝色为新值；空值按字段跳过，保留原数据；橙色提示人工核算覆盖。</p></div><button id="clear" class="text-button">取消所有勾选</button></div>
 <div id="tabs" class="tabs" role="group" aria-label="查看记录类型"></div>
 <div class="tools"><input id="search" placeholder="搜索订单号、商品名、SKU / 货号" aria-label="搜索变更"><select id="shop" aria-label="筛选店铺"><option value="">全部店铺</option></select><div class="bulk-tools"><button id="select-filtered" class="secondary compact">勾选筛选结果</button><button id="unselect-filtered" class="secondary compact">取消筛选结果</button></div><span id="match-note"></span></div>
 <div id="changes" class="table-scroll" tabindex="0" aria-label="导入差异表，可横向和纵向滚动"></div><div id="pager" class="pager"></div>

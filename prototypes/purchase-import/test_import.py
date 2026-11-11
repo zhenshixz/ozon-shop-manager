@@ -47,6 +47,42 @@ class ImportTest(unittest.TestCase):
         e=self.box.preview([row(本地备注='11-07;312g;已采购',**{'采购金额(产品-RMB)':''})])['entries'][0]
         self.assertFalse(e['changes'])
 
+    def test_blank_weight_keeps_value_and_provenance(self):
+        for origin in ('manual', 'inherited', 'scaled', ''):
+            with self.subTest(origin=origin):
+                o=order()
+                o['inputs'].update(weight_override='624' if origin else None,
+                                   weight_origin=origin, weight_source_order_id=17 if origin else None)
+                o['calculation']=calculate(o)
+                box=Sandbox(dict(orders=[o]),calculate)
+                before=copy.deepcopy(box.orders[0]['inputs'])
+                p=box.preview([row(本地备注='  ')])
+                self.assertEqual([c['field'] for c in p['entries'][0]['changes']],['cost'])
+                box.apply(p['token'],[c['id'] for c in p['entries'][0]['changes']])
+                self.assertEqual(box.orders[0]['inputs'],before)
+
+    def test_blank_cost_updates_weight_only(self):
+        p=self.box.preview([row(**{'采购金额(产品-RMB)':'  '})])
+        original=copy.deepcopy(self.box.orders[0]['lines'][0])
+        self.assertEqual([c['field'] for c in p['entries'][0]['changes']],['weight'])
+        self.box.apply(p['token'],['1:weight'])
+        self.assertEqual(self.box.orders[0]['lines'][0],original)
+        self.assertEqual(self.box.orders[0]['inputs']['weight_override'],'854')
+
+    def test_both_blank_and_ordinary_note_are_not_updates(self):
+        original=copy.deepcopy(self.box.orders)
+        for note in ('', '11-03:6-2', '已采购', '   '):
+            e=self.box.preview([row(本地备注=note,**{'采购金额(产品-RMB)':''})])['entries'][0]
+            self.assertFalse(e['changes'])
+            self.assertFalse(e['error'])
+        self.assertEqual(self.box.orders,original)
+
+    def test_missing_cost_remains_missing(self):
+        self.box.orders[0]['lines'][0]['purchase_unit']=None
+        p=self.box.preview([row(**{'采购金额(产品-RMB)':''})])
+        self.box.apply(p['token'],['1:weight'])
+        self.assertIsNone(self.box.orders[0]['lines'][0]['purchase_unit'])
+
     def test_stale_preview_and_unknown_field(self):
         p=self.box.preview([row()])
         with self.assertRaises(ValueError): self.box.apply(p['token'],['2:weight'])

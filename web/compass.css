@@ -343,6 +343,7 @@
   right: 0;
   left: auto;
 }
+.home-status-select-wrap .shop-picker-pop {left:auto;right:0;max-height:min(480px,70dvh);overflow-y:auto;overscroll-behavior:contain}
 .shop-pop-head {
   display: flex;
   align-items: center;

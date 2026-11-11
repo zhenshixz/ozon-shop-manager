@@ -207,6 +207,20 @@ class MonitorTests(unittest.TestCase):
         with self.assertRaises(MonitorError):
             Ozon(SHOP, transport).postings("fbs", self.now - 60, self.now)
 
+    def test_status_delta_pagination_preserves_creation_range_and_overlap(self):
+        transport = FakeTransport([
+            {'postings':[{'posting_number':'1'}],'has_next':True,'cursor':'next'},
+            {'postings':[{'posting_number':'2'}],'has_next':False,'cursor':''},
+        ])
+        api=Ozon(SHOP,transport)
+        self.assertEqual(len(api.postings('fbs',self.now-45*86400,self.now,changed_since=self.now-900)),2)
+        first,second=[r[1] for r in transport.requests]
+        self.assertEqual(first['filter'],second['filter'])
+        self.assertEqual(first['filter']['last_changed_status_date'],{'from':stamp(self.now-900),'to':stamp(self.now)})
+        self.assertEqual(first['filter']['since'],stamp(self.now-45*86400))
+        self.assertEqual(second['cursor'],'next')
+        with self.assertRaises(ValueError):api.postings('fbo',self.now-60,self.now,changed_since=self.now-900)
+
     def test_rate_limit_keeps_orders_durable_and_products_out_of_order_messages(self):
         self.new_order(1)
         client = FakePush()

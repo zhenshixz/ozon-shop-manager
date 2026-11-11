@@ -149,6 +149,11 @@
 
 /* Detailed delivery stage, cached Chinese titles, in-page image viewer. */
 .header-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
+.header-actions>.secondary{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:11px 15px;border:1px solid #dce1e9;border-radius:10px;background:#fff;color:#36445a;font-size:14px;font-weight:600;line-height:20px;text-decoration:none;white-space:nowrap;transition:background .15s,border-color .15s,color .15s}
+.header-actions>.secondary:hover{border-color:#b7c9e8;background:#f8faff;color:var(--blue)}
+.header-actions>.secondary:focus-visible{outline:3px solid #94b6ff;outline-offset:2px}
+.workspace-link svg{width:16px;height:16px;flex-shrink:0;color:#73849c}
+.workspace-link:hover svg{color:inherit}
 .language-switch{display:flex;padding:3px;background:#e9edf4;border-radius:9px;gap:2px}
 .language-switch button{padding:7px 10px;border-radius:7px;font-size:12px;color:#687b94;background:transparent}
 .language-switch button[aria-pressed=true]{background:white;color:#225fe4;box-shadow:0 1px 3px #18396b12}
@@ -284,6 +289,7 @@
 .parcel-heading{margin:0 0 7px;color:#63768f;font-size:11px;font-weight:600}
 .parcel-heading span{margin-left:5px;color:#7b8aa0;font-weight:400}
 .parcel-plans{display:grid;gap:6px;margin-bottom:13px}
+.parcel-plans{max-height:380px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
 .parcel-plan{cursor:pointer;display:flex;justify-content:space-between;align-items:flex-start;gap:9px;padding:8px 10px;border:1px solid #e7edf6;border-radius:8px;background:#fff;color:#384c68;font-size:12px;line-height:1.55}
 .parcel-plan.is-selected{border-color:#a8c5f3;background:#eef5ff}
 .parcel-plan input[type=radio]{flex:0 0 15px;width:15px;height:15px;min-height:0;margin:2px 0 0;padding:0;accent-color:var(--blue)}
@@ -299,4 +305,33 @@
 
 .sync-dialog{max-width:520px}.sync-selection{display:flex;gap:8px;margin:18px 0 12px}.sync-shops{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.sync-shop{display:flex;align-items:center;gap:10px;padding:14px;border:1px solid #dce5f1;border-radius:12px;cursor:pointer}.sync-shop:has(input:checked){border-color:#2563eb;background:#eff6ff}.sync-shop input{width:18px;height:18px;accent-color:#2563eb;margin:0}.sync-dialog .dialog-body{padding:22px}.sync-dialog .dialog-body p{margin-top:0}
 
-.recent-sales{display:inline-flex;align-items:center;gap:4px;margin-left:7px;padding:2px 7px;border-radius:5px;background:#eef6f5;color:#5e827c;font-size:10.5px;line-height:1.35;white-space:nowrap;font-variant-numeric:tabular-nums}.recent-sales b{color:#237565;font-size:11px;font-weight:650}.recent-sales>span{color:#8aa29e;font-size:10px}@media(max-width:650px){.recent-sales{margin-left:4px;padding:2px 5px;font-size:10px}}
+/* Main status filter: two compact rows on phones. */
+@media(max-width:650px){.filters #order-status-filter,.filters #shop{width:calc(50% - 4px)}.filters input[type=date],.filters input[type=search]{width:calc(50% - 4px)}}
+@media(max-width:360px){.stats>div:not(.cost-stat){padding-inline:2px}.stats .cost-stat-button{padding-inline:2px}}
+
+/* Order card metadata: identifiers first, quantity chip and secondary sales text below. */
+.order-card .product-info h3{margin-bottom:6px}
+.order-card .meta{gap:8px}
+.product-identifiers{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 16px;min-width:0}
+.product-id{display:inline-flex;align-items:baseline;gap:6px;min-width:0;max-width:100%;line-height:18px}
+.product-id .meta-label{flex-shrink:0}
+.product-id .meta-code{min-width:0;color:#64748b}
+.product-metrics{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}
+.product-metrics .meta-qty{display:inline-flex;align-items:center;gap:6px;min-height:24px;margin:0;padding:2px 8px;border:1px solid #e8edf3;border-radius:6px;background:#f8fafc;color:#64748b;font-size:11.5px;line-height:18px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.product-metrics .meta-qty b{font-size:12px;line-height:18px;font-weight:600;color:#334155}
+.product-metrics .meta-qty.is-multi{background:#fff8ed;border-color:#f9e7c8;color:#a16207}
+.product-metrics .meta-qty.is-multi b{color:#a16207}
+.recent-sales{display:inline-flex;align-items:baseline;gap:3px;margin-left:auto;padding:0;border:0;background:none;color:#8b95a3;font-size:11px;font-weight:400;line-height:18px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.recent-sales b{color:inherit;font-size:inherit;font-weight:400}
+.price-notes{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.price-row .price-notes .purchase-reuse-badge{margin:0;min-height:22px;line-height:18px;padding:1px 7px;font-size:11px;border-radius:5px}
+.order-card .price-row{gap:8px 14px;padding:8px 12px}
+@media(max-width:650px){
+  .product-identifiers{display:grid;gap:2px}
+  .product-id{font-size:11px;line-height:17px}
+  .product-id .meta-label{font-size:11px}
+  .order-card .meta{gap:7px}
+  .product-metrics .meta-qty{font-size:11px;padding-inline:7px}
+  .price-notes{flex-basis:100%}
+  .order-card .price-row{justify-content:flex-start;gap:7px 12px;padding:8px 10px}
+}

@@ -31,7 +31,7 @@ class ManualSyncTest(unittest.TestCase):
 
     def test_forced_api_fetch_preserves_inputs_and_partial_errors(self):
         now=dt.datetime.now(core.CHINA);stamp=now.isoformat()
-        posting=dict(posting_number='A-1',order_number='A',created_at=stamp,status='awaiting_packaging',
+        posting=dict(posting_number='A-1',order_number='A',created_at=stamp,status='awaiting_packaging',substatus='posting_created',
                      products=[dict(offer_id='x',sku=123,name='X',quantity=1,price='30',weight=.3)])
         with self.store.connection() as db:
             core.capture_postings(db,self.shops[1],'fbs',[posting],now.timestamp())

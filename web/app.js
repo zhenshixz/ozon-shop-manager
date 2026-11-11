@@ -4,6 +4,7 @@ let csrf='',current=null,state='',orders=[],timer=null,previewSerial=0,editRevis
 let weightMode='api',confirmedWeight='';
 let parcelWeights={},dispatchChoice=0;
 let syncingOrders=false,syncPoll=null,syncMessage='';
+let statusVersion=null,statusCheckBusy=false,fullOrdersLoading=false;
 let costRange={from:'',to:''},costSerial=0,costOverviewSerial=0,imagesLoading=false,costOffset=0,costDetailOrders=[];
 let titleLanguage='zh';
 try{titleLanguage=localStorage.getItem('ozon-title-language')||'zh';}catch{}
@@ -45,7 +46,15 @@ function titleNote(line){
 }
 function productTitle(line,linked=false){const title=esc(displayTitle(line)),sku=String(line?.sku??'');return linked&&/^[1-9]\d*$/.test(sku)?`<a class="product-title-link" href="https://www.ozon.ru/product/${sku}/" target="_blank" rel="noopener noreferrer" title="在新标签页查看 OZON 商品">${title}<span class="product-title-arrow" aria-hidden="true"> ↗</span></a>`:title;}
 function productStateContent(s,detail=false){if(!s||!['removed','archived'].includes(s.state))return '';const label=s.state==='removed'?'已下架':'已归档',reason=s.state==='removed'?(s.reasons||[]).join('；'):'';const note=[reason,`检查于 ${fmtTime(s.checked)}`,s.stale?'状态较旧，等待同步':''].filter(Boolean).join(' · ');return `<span class="product-state ${s.state}" title="${esc(note)}">${label}</span>${detail?`<span class="product-state-detail">${esc(note)}</span>`:''}`;}
-function productInfo(line,linked=false,recent=false){const qty=line?.quantity??'—',multi=Number(qty)>1;return `<div class="product">${thumbnail(line)}<div class="product-info"><h3 title="${esc(line?.name||'')}">${productTitle(line,linked)}</h3>${productStateBadge(line?.product_status,linked)}${titleNote(line)?`<small class="translation-pending">${esc(titleNote(line))}</small>`:''}<div class="meta">${line?.offer_id?`<div class="meta-line"><span class="meta-label">货号</span> <span class="meta-code">${esc(line.offer_id)}</span></div>`:''}<div class="meta-line"><span class="meta-qty${multi?' is-multi':''}">数量 <b>${esc(qty)}</b></span>${line?.sku?`<span class="meta-dot">·</span><span class="meta-label">SKU</span> <span class="meta-code">${esc(line.sku)}</span>`:''}${recent&&line?.sales_7d!=null?`<span class="recent-sales" title="同店同款，近7个北京时间自然日（含今天）的商品件数；取消和退货不计">近7天销量 <b>${esc(line.sales_7d)}</b><span>件</span></span>`:''}</div></div></div></div>`;}
+function productInfo(line,linked=false,recent=false){
+  const qty=line?.quantity??'—',multi=Number(qty)>1;
+  const quantity=`<span class="meta-qty${multi?' is-multi':''}"><span>数量</span> <b>${esc(qty)}</b></span>`;
+  const identifiers=[['货号',line?.offer_id],['SKU',line?.sku]].filter(([,value])=>value!=null&&value!=='');
+  const meta=recent
+    ?`${identifiers.length?`<div class="product-identifiers">${identifiers.map(([label,value])=>`<span class="product-id"><span class="meta-label">${label}</span><span class="meta-code">${esc(value)}</span></span>`).join('')}</div>`:''}<div class="product-metrics">${quantity}${line?.sales_7d!=null?`<span class="recent-sales" title="同店同款，近7个北京时间自然日（含今天）的商品件数；取消和退货不计"><span>近7天销量</span><b>${esc(line.sales_7d)}</b><span>件</span></span>`:''}</div>`
+    :`${line?.offer_id?`<div class="meta-line"><span class="meta-label">货号</span><span class="meta-code">${esc(line.offer_id)}</span></div>`:''}<div class="meta-line">${quantity}${line?.sku?`<span class="meta-dot">·</span><span class="meta-label">SKU</span><span class="meta-code">${esc(line.sku)}</span>`:''}</div>`;
+  return `<div class="product">${thumbnail(line)}<div class="product-info"><h3 title="${esc(line?.name||'')}">${productTitle(line,linked)}</h3>${productStateBadge(line?.product_status,linked)}${titleNote(line)?`<small class="translation-pending">${esc(titleNote(line))}</small>`:''}<div class="meta">${meta}</div></div></div>`;
+}
 function statusTone(status){const s=String(status||'').toLowerCase();return ['awaiting_packaging','awaiting_approve'].includes(s)?'packaging':s==='awaiting_deliver'?'deliver':s==='delivering'?'delivering':s==='delivered'?'delivered':['cancelled','canceled','returned'].includes(s)?'cancelled':'default';}
 function statusBadgeHtml(order){const main=statusName(order.status),stage=order.status_label,hasSub=order.substatus&&stage&&stage!==main;return `<span class="status-badge status-${statusTone(order.status)}" title="${esc(statusHint(order))}"><b>${esc(main)}</b>${hasSub?`<em> · ${esc(stage)}</em>`:''}</span>`;}
 function statusName(status){return ({awaiting_deliver:'待交运',awaiting_packaging:'待备货',delivering:'配送中',delivered:'已送达',cancelled:'已取消',canceled:'已取消',returned:'已退货',awaiting_approve:'待确认'})[status]||status||'状态待同步';}
@@ -66,8 +75,37 @@ $('large-image').addEventListener('error',()=>{if($('image-viewer').open)$('imag
 function updateLanguageButtons(){for(const button of document.querySelectorAll('[data-title-language]'))button.setAttribute('aria-pressed',String(button.dataset.titleLanguage===titleLanguage));}
 for(const button of document.querySelectorAll('[data-title-language]'))button.addEventListener('click',()=>{titleLanguage=button.dataset.titleLanguage;try{localStorage.setItem('ozon-title-language',titleLanguage);}catch{}updateLanguageButtons();renderOrders();});
 updateLanguageButtons();
+function setStatValue(id,text){
+  const element=$(id);element.dataset.fullValue=text;element.textContent=text;
+}
+function compactStatValues(text){
+  const short=value=>Number(value.toFixed(1)).toString();
+  if(text.startsWith('¥')){
+    const n=Number(text.slice(1));if(!Number.isFinite(n))return [];
+    const abs=Math.abs(n),unit=abs>=99995000?['亿',1e8]:abs>=9999.95?['万',1e4]:abs>=1e3?['千',1e3]:null;
+    return unit?[`¥${short(n/unit[1])}${unit[0]}`,`${short(n/unit[1])}${unit[0]}`,`${Math.round(n/unit[1])}${unit[0]}`]:[`¥${short(n)}`,`¥${Math.round(n)}`];
+  }
+  if(text.endsWith('%'))return [Number(Number(text.slice(0,-1)).toFixed(1))+'%',Math.round(Number(text.slice(0,-1)))+'%'];
+  if(text.endsWith(' 单')){
+    const n=Number(text.slice(0,-2));return [Number(n.toFixed(1))+'单',Math.round(n)+'单'];
+  }
+  return [];
+}
 function fitStats(){
-  const elements=[...document.querySelectorAll('.stats strong')];let size=matchMedia('(max-width:760px)').matches?16:24;
+  const elements=[...document.querySelectorAll('.stats strong')],mobile=matchMedia('(max-width:760px)').matches;
+  for(const el of elements){
+    const full=el.dataset.fullValue??el.textContent;
+    el.textContent=full;el.title=full;el.setAttribute('aria-label',full);
+    if(mobile){
+      el.style.fontSize='16px';
+      for(const compact of compactStatValues(full)){
+        if(el.scrollWidth<=el.clientWidth)break;
+        el.textContent=compact;
+      }
+    }
+  }
+  if(mobile)return;
+  let size=24;
   const apply=()=>elements.forEach(el=>el.style.fontSize=size+'px');apply();
   while(elements.some(el=>el.scrollWidth>el.clientWidth)&&size>10){size--;apply();}
 }
@@ -77,8 +115,8 @@ async function loadCostOverview(){
   try{
     const result=await api('/cost-statistics?'+new URLSearchParams({shop:$('shop').value}));
     if(serial!==costOverviewSerial)return;
-    $('cost-card-total').textContent=money(result.statistics.total_cost);fitStats();
-  }catch{if(serial===costOverviewSerial)$('cost-card-total').textContent='—';}
+    setStatValue('cost-card-total',money(result.statistics.total_cost));fitStats();
+  }catch{if(serial===costOverviewSerial){setStatValue('cost-card-total','—');fitStats();}}
 }
 async function loadCosts(offset=0){
   const serial=++costSerial,range={...costRange};
@@ -260,46 +298,67 @@ async function fillMissingImages(){
 }
 async function loadOrders(){
   const serial=++loadSerial;
+  fullOrdersLoading=true;
   loadCostOverview();
   $('refresh').disabled=true;
   try{
-    const query=new URLSearchParams({shop:$('shop').value,date:$('date').value,q:$('search').value});
-    const [list,statistics,dashboard]=await Promise.all([api('/orders?'+query),api('/statistics?'+new URLSearchParams({shop:$('shop').value})),api('/analytics?'+new URLSearchParams({shop:$('shop').value,from:$('date').value,to:$('date').value,q:$('search').value}))]);
+    const query=new URLSearchParams({shop:$('shop').value,date:$('date').value,q:$('search').value,status:$('order-status-filter').value});
+    const [,statistics,dashboard]=await Promise.all([api('/orders?'+query).then(list=>{
+      if(serial!==loadSerial)return;
+      orders=list.orders;statusVersion=list.status_version;renderOrders();
+    }),api('/statistics?'+new URLSearchParams({shop:$('shop').value})),api('/analytics?'+new URLSearchParams({shop:$('shop').value,from:$('date').value,to:$('date').value,q:$('search').value}))]);
     if(serial!==loadSerial)return;
-    orders=list.orders;
     const ready=orders.filter(o=>o.calculation.status==='ready');
     const eligible=ready.filter(o=>o.calculation.included_in_summary!==false);
     const summary=dashboard.summary;
     const total=Number(summary.profit);
-    $('total').textContent=summary.eligible_ready?money(total):'—';
+    setStatValue('total',summary.eligible_ready?money(total):'—');
     $('total').classList.toggle('negative',total<0);
     const sales=Number(summary.sales);
-    $('sales-total').textContent=money(sales);
-    $('sales-detail').textContent=`${summary.orders} 个有效订单 · 按当前筛选`;
-    $('home-margin').textContent=summary.margin==null?'—':summary.margin+'%';
+    setStatValue('sales-total',money(sales));
+    $('sales-detail').textContent=`${summary.orders} 个有效订单 · 按店铺、日期和搜索`;
+    setStatValue('home-margin',summary.margin==null?'—':summary.margin+'%');
     const stats=statistics.statistics;
-    $('daily-average').textContent=stats.complete?stats.daily_average+' 单':'同步中';
+    setStatValue('daily-average',stats.complete?stats.daily_average+' 单':'同步中');
     $('daily-detail').textContent=`近 7 天 ${stats.total_orders} 单 · 今日 ${stats.today_orders} 单`;
     if($('mobile-statistics-note'))$('mobile-statistics-note').textContent=`已运营 ${summary.operating_days} 天 · 今日 ${stats.today_orders} 单 · 近7天 ${stats.total_orders} 单`;
     $('statistics-note').textContent=`${stats.start_date} 至 ${stats.end_date} · 北京时间 · ${stats.shop_count} 家店${stats.complete?' · 日均 = 有效订单数 ÷ 7 天':' · 历史订单补查中，完整后显示日均，避免把缺失记录当成零单'}`;
-    renderOrders();fitStats();notice(syncMessage);
-  }catch(error){if(serial===loadSerial)notice(error.message);}finally{if(serial===loadSerial)$('refresh').disabled=syncingOrders;}
+    fitStats();notice(syncMessage);
+  }catch(error){if(serial===loadSerial)notice(error.message);}finally{if(serial===loadSerial){fullOrdersLoading=false;$('refresh').disabled=syncingOrders;}}
+}
+function canRefreshOrderStatus(){
+  return !document.hidden&&!$('workspace').hidden&&!fullOrdersLoading&&!loading
+    &&!$('detail').open&&!$('cost-dialog').open&&!$('image-viewer').open;
+}
+async function checkOrderStatus(){
+  if(statusCheckBusy||!canRefreshOrderStatus())return;
+  statusCheckBusy=true;
+  const serial=loadSerial;
+  try{
+    const result=await api('/order-status-version?'+new URLSearchParams({shop:$('shop').value}));
+    if(serial!==loadSerial||!canRefreshOrderStatus()||result.version===statusVersion)return;
+    const query=new URLSearchParams({shop:$('shop').value,date:$('date').value,q:$('search').value,status:$('order-status-filter').value});
+    const list=await api('/orders?'+query);
+    if(serial!==loadSerial||!canRefreshOrderStatus())return;
+    orders=list.orders;statusVersion=list.status_version;renderOrders();
+  }catch{/* Keep the last acknowledged version; the next check retries. */}
+  finally{statusCheckBusy=false;}
 }
 function renderOrders(){
-  const cancelledOnly=$('cancelled-only')?.checked||false;
-  const scoped=orders.filter(o=>['cancelled','canceled'].includes(String(o.status||'').toLowerCase())===cancelledOnly);
+  const mainStatus=$('order-status-filter').value;
+  const scoped=orders.filter(o=>!mainStatus||(mainStatus==='cancelled'?['cancelled','canceled'].includes(String(o.status||'').toLowerCase()):o.status===mainStatus));
   const readyCount=scoped.filter(o=>o.calculation.status==='ready').length;
   $('pending').textContent=scoped.length-readyCount;$('ready').textContent=readyCount;
   const shown=scoped.filter(o=>!state||o.calculation.status===state);
-  $('count').textContent=`${shown.length} 个${cancelledOnly?'已取消':''}包裹 · 北京时间`;
+  $('count').textContent=`${shown.length} 个${mainStatus?statusName(mainStatus):''}包裹 · 北京时间`;
   $('orders').innerHTML=shown.length?shown.map(o=>{
-    const c=o.calculation;
+    const c=o.calculation,reuseBadges=purchaseReuseBadge(o);
     const products=(o.lines.length?o.lines:[null]).map(line=>{
       const unitPrice=line?.unit_price==null?'待同步':line.currency==='CNY'?money(line.unit_price):`${esc(line.currency||'原币')} ${esc(line.unit_price)}`;
       return `<div class="order-product">${productInfo(line,false,true)}${o.lines.length>1?`<div class="order-unit-price">成交单价 <b>${unitPrice}</b></div>`:''}</div>`;
     }).join('');
-    return `<article class="order-card" data-order="${o.id}" tabindex="0" role="button" aria-label="查看 ${esc(o.shop_name)} ${esc(o.posting)} 的利润"><div class="card-main"><div class="card-top"><div class="card-head-primary"><span class="shop-badge">${esc(o.shop_name)}</span><span class="card-posting">${esc(o.posting)}</span></div>${statusBadgeHtml(o)}<div class="card-head-time"><span>下单 ${fmtTime(o.created)}</span><span class="sync-time">核对 ${fmtTime(o.status_checked_at||o.seen)}</span></div></div><div class="order-products">${products}</div>${o.lines.length>1?`<div class="order-products-summary">共 ${o.lines.length} 种商品 · ${o.lines.reduce((sum,line)=>sum+Number(line.quantity||0),0)} 件</div>`:''}<div class="price-row"><div class="price-metrics"><div class="price-metric"><span class="price-label">订单价</span><strong class="price-val">${money(c.revenue)}</strong></div><span class="price-divider" aria-hidden="true"></span><div class="price-metric price-metric-cost"><span class="price-label">采购成本</span><strong class="price-val${c.purchase_cost==null?' is-missing':''}">${c.purchase_cost==null?'待填写':money(c.purchase_cost)}</strong></div></div>${purchaseReuseBadge(o)}</div></div><div class="card-profit"><div class="profit-summary">${c.profit==null?'<strong class="pending">待补资料</strong>':`<span class="profit-caption">预估利润</span><strong class="${Number(c.profit)<0?'negative':''}">${money(c.profit)}</strong><small class="profit-margin">销售利润率 ${esc(c.sales_margin??'—')}%</small>`}${c.included_in_summary===false?'<small class="profit-excluded">已取消 / 退货 · 不计合计</small>':''}</div><button type="button" tabindex="-1">${c.profit==null?'填写采购价':'查看 / 修改'} ↗</button></div></article>`;
-  }).join(''):`<div class="empty">${cancelledOnly?'当前筛选下没有已取消订单':'当前筛选下还没有订单'}</div>`;
+    return `<article class="order-card" data-order="${o.id}" tabindex="0" role="button" aria-label="查看 ${esc(o.shop_name)} ${esc(o.posting)} 的利润"><div class="card-main"><div class="card-top"><div class="card-head-primary"><span class="shop-badge">${esc(o.shop_name)}</span><span class="card-posting">${esc(o.posting)}</span></div>${statusBadgeHtml(o)}<div class="card-head-time"><span>下单 ${fmtTime(o.created)}</span><span class="sync-time">核对 ${fmtTime(o.status_checked_at||o.seen)}</span></div></div><div class="order-products">${products}</div>${o.lines.length>1?`<div class="order-products-summary">共 ${o.lines.length} 种商品 · ${o.lines.reduce((sum,line)=>sum+Number(line.quantity||0),0)} 件</div>`:''}<div class="price-row"><div class="price-metrics"><div class="price-metric"><span class="price-label">订单价</span><strong class="price-val">${money(c.revenue)}</strong></div><span class="price-divider" aria-hidden="true"></span><div class="price-metric price-metric-cost"><span class="price-label">采购成本</span><strong class="price-val${c.purchase_cost==null?' is-missing':''}">${c.purchase_cost==null?'待填写':money(c.purchase_cost)}</strong></div></div>${reuseBadges?`<div class="price-notes">${reuseBadges}</div>`:''}</div></div><div class="card-profit"><div class="profit-summary">${c.profit==null?'<strong class="pending">待补资料</strong>':`<span class="profit-caption">预估利润</span><strong class="${Number(c.profit)<0?'negative':''}">${money(c.profit)}</strong><small class="profit-margin">销售利润率 ${esc(c.sales_margin??'—')}%</small>`}${c.included_in_summary===false?'<small class="profit-excluded">已取消 / 退货 · 不计合计</small>':''}</div><button type="button" tabindex="-1">${c.profit==null?'填写采购价':'查看 / 修改'} ↗</button></div></article>`;
+  }).join(''):`<div class="empty">${mainStatus?'当前筛选下没有'+esc(statusName(mainStatus))+'订单':'当前筛选下还没有订单'}</div>`;
   bindThumbnails($('orders'));
   for(const card of $('orders').querySelectorAll('[data-order]')){
     card.addEventListener('click',()=>openOrder(Number(card.dataset.order)));
@@ -462,7 +521,8 @@ function showParcelComparison(data,reset=false,pending=false){
   $('parcel-plans').innerHTML=plans.map((plan,index)=>{
     const breakdown=plan.parts.map(({key,count})=>{
       const p=packages[key];
-      return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克${p.source==='API 估重'?'（估）':''} · ${esc(p.tier)} · 扣费 ${esc(p.rate)}%`;
+      const weightHint=p.source==='API 估重'?'（API估重）':p.source.includes('推算')?'（推算）':p.source==='同首包重量'?'（沿用首包）':'';
+      return p.error?esc(p.error):`${esc(p.label)}${count>1?' × '+count:''} · ${money(p.revenue)} / ${Number(p.weight)} 克${weightHint} · ${esc(p.tier)} · 扣费 ${esc(p.rate)}%`;
     }).join('<br>');
     return `<label class="parcel-plan${index===dispatchChoice?' is-selected':''}"><input type="radio" name="dispatch-choice" value="${index}" ${index===dispatchChoice?'checked':''}><span class="parcel-plan-body"><b>${esc(plan.label)}</b><small>${breakdown}</small></span><strong>${money(plan.total_cost)}</strong></label>`;
   }).join('');
@@ -478,10 +538,10 @@ function showParcelComparison(data,reset=false,pending=false){
     input.closest('label').hidden=!selectedKeys.includes(key);
     input.placeholder=p.default_weight==null?'填写克数':String(Number(p.default_weight));
     const source=fields.querySelector(`[data-parcel-source="${key}"]`);
-    source.textContent=parcelWeights[key]?'本单录入':key.includes('-')?'留空沿用首包':p.source==='单件实称推算'?'单件实称 × 数量':p.reference_posting?'同件数历史实称':'API 估重参考';
+    source.textContent=parcelWeights[key]?'本单录入':key.includes('-')?'留空沿用首包':p.source==='本单整包重量推算'?'本单整包按件数推算':p.source==='单件实称推算'?'单件实称 × 数量':p.reference_posting?'同件数历史实称':'API 估重参考';
     source.title=p.reference_posting?`来源 ${p.reference_posting}`:'';
   }
-  $('parcel-note').textContent=`货代费 ${money(forwarder)}/包。历史实称自动带入，可修改。只有 API 估重时，请填写实称后再核算。`;
+  $('parcel-note').textContent=`费用合计含运费、平台扣费和货代费（${money(forwarder)}/包）。历史实称及单件推算注明来源，API估重仅供比较；请核实拆后实重、线路与能否拆分，再确认保存。`;
 }
 function queuePreview(){
   previewSerial++;
@@ -606,12 +666,11 @@ $('sync-start').addEventListener('click',async()=>{
   try{const result=await api('/order-sync',{shops});$('sync-dialog').close();showSyncTask(result.task);}
   catch(error){notice(error.message);syncSelection();}
 });
-$('cancelled-only')?.addEventListener('change',renderOrders);
-for(const id of ['shop','date'])$(id).addEventListener('change',loadOrders);
+for(const id of ['shop','date','order-status-filter'])$(id).addEventListener('change',loadOrders);
 let searchTimer;$('search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(loadOrders,250);});
 document.querySelectorAll('[data-state]').forEach(button=>button.addEventListener('click',()=>{state=button.dataset.state;document.querySelectorAll('[data-state]').forEach(b=>b.classList.toggle('active',b===button));renderOrders();}));
 async function start(){
-  if($('cancelled-only'))$('cancelled-only').checked=false;
+  $('order-status-filter').value='awaiting_packaging';
   try{
     const params=new URLSearchParams(location.hash.slice(1)),token=params.get('k');
     let info;
@@ -626,10 +685,12 @@ async function start(){
   }catch(error){$('gate-status').textContent=error.message;}
 }
 start();
+setInterval(checkOrderStatus,5000);
+for(const id of ['detail','cost-dialog','image-viewer'])$(id).addEventListener('close',checkOrderStatus);
 setInterval(()=>{if(!document.hidden&&!$('workspace').hidden&&!$('detail').open&&!$('cost-dialog').open&&!$('image-viewer').open&&!loading&&!$('refresh').disabled)loadOrders();},60000);
 setInterval(fillMissingImages,10000);
 
 function productStateBadge(s,detail=false){return s?.key?`<span data-product-state="${esc(s.key)}" data-state-detail="${detail}">${productStateContent(s,detail)}</span>`:productStateContent(s,detail);}
 async function refreshProductBadges(){if(document.visibilityState!=='visible')return;try{const r=await api('/product-status');for(const node of document.querySelectorAll('[data-product-state]')){const s=r.statuses[node.dataset.productState];if(s)node.innerHTML=productStateContent(s,node.dataset.stateDetail==='true');}}catch{}}
 setInterval(refreshProductBadges,60000);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshProductBadges();});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){refreshProductBadges();checkOrderStatus();}});

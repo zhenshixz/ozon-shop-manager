@@ -14,8 +14,8 @@ from profit_web import create_app
 class FakeAPI:
     def __init__(self):
         self.history=[];self.details={};self.products=[];self.calls=[];self.error=None
-    def postings(self,source,start,end):
-        self.calls.append(('history',source,start,end))
+    def postings(self,source,start,end,changed_since=None):
+        self.calls.append(('history',source,start,end) if changed_since is None else ('delta',source,start,end,changed_since))
         if self.error: raise self.error
         return self.history
     def posting(self,source,number):
@@ -36,7 +36,7 @@ class ProfitSyncTest(unittest.TestCase):
 
     def posting(self,number='A-1',order='A',status='awaiting_packaging',age=86400):
         return {'posting_number':number,'order_number':order,'created_at':monitor.stamp(self.now-age),
-                'status':status,'products':[{'offer_id':'hat','sku':123,'name':'Hat','quantity':1,
+                'status':status,'substatus':'posting_created','products':[{'offer_id':'hat','sku':123,'name':'Hat','quantity':1,
                 'price':{'amount':'39','currency':'CNY'},'weight':.339}]}
 
     def capture(self,post,shop=None,seen=None):
@@ -81,7 +81,88 @@ class ProfitSyncTest(unittest.TestCase):
             self.assertEqual(order['created'],self.now-45*86400)
             self.assertEqual(order['lines'][0]['price_override'],'40')
             self.assertEqual(order['lines'][0]['purchase_unit'],'12')
-        self.assertEqual(self.api.calls,[('detail','fbs','A-1')])
+        self.assertEqual(self.api.calls[-1],('detail','fbs','A-1'))
+        self.assertLessEqual(self.api.calls[0][2],self.now-45*86400)
+
+    def test_600_orders_status_batch_preserves_all_manual_values(self):
+        posts=[self.posting(str(i)+'-1',str(i)) for i in range(600)]
+        with self.store.connection() as db:
+            core.capture_postings(db,self.shop,'fbs',posts,self.now-3600)
+            db.execute("UPDATE profit_lines SET purchase_unit='12',price_override='40'")
+            db.execute("INSERT INTO profit_inputs VALUES (1,'312','auto',NULL,'2','0',?)",(self.now-100,))
+            db.execute("INSERT INTO profit_weight_sources VALUES (1,'manual',NULL,?,NULL)",(self.now-100,))
+            before=[tuple(r) for r in db.execute('SELECT * FROM profit_lines ORDER BY id')]
+            inputs=[tuple(r) for r in db.execute('SELECT * FROM profit_inputs')]
+        self.cover()
+        self.api.history=[dict(p,status='awaiting_deliver',substatus='posting_transferring_to_delivery',products=[]) for p in posts]
+        sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now)
+        self.assertEqual(len(self.api.calls),1)
+        self.api.history=[]
+        sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now+300)
+        self.assertEqual(len(self.api.calls),2)
+        self.assertEqual(self.api.calls[-1][0],'delta')
+        with self.store.connection() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM profit_orders WHERE status='awaiting_deliver'").fetchone()[0],600)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM profit_order_status_details WHERE checked=?',(self.now+300,)).fetchone()[0],600)
+            self.assertEqual([tuple(r) for r in db.execute('SELECT * FROM profit_lines ORDER BY id')],before)
+            self.assertEqual([tuple(r) for r in db.execute('SELECT * FROM profit_inputs')],inputs)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM events').fetchone()[0],0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM messages').fetchone()[0],0)
+
+    def test_incremental_overlap_confirms_unchanged_and_refreshes_old_active(self):
+        old=self.posting(age=45*86400);self.capture(old);self.cover()
+        self.api.history=[old]
+        sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now)
+        self.api.history=[]
+        sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now+300)
+        call=self.api.calls[-1]
+        self.assertEqual(call[0],'delta')
+        self.assertLessEqual(call[2],self.now-45*86400)
+        self.assertEqual(call[-1],self.now-900)
+        with self.store.connection() as db:
+            detail=db.execute('SELECT checked,changed FROM profit_order_status_details').fetchone()
+            self.assertEqual(detail['checked'],self.now+300)
+            self.assertEqual(detail['changed'],self.now)
+        self.api.history=[dict(old,status='delivered',substatus='posting_delivered')]
+        sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now+600)
+        with self.store.connection() as db:
+            self.assertEqual(core.load_order(db,1)['status'],'delivered')
+            self.assertEqual(db.execute('SELECT changed FROM profit_order_status_details').fetchone()[0],self.now+600)
+        self.assertFalse(any(c[0]=='detail' for c in self.api.calls))
+
+    def test_delta_error_or_invalid_response_does_not_advance_cursor_or_checked(self):
+        p=self.posting();self.capture(p);self.cover();self.api.history=[p]
+        sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now)
+        for bad in ('429','invalid'):
+            if bad=='429': self.api.error=monitor.ApiError('Ozon','/list',429)
+            else:
+                self.api.error=None
+                self.api.history=[dict(p,status='delivered',substatus='posting_delivered'),dict(p,posting_number='bad',substatus=None)]
+            with self.assertRaises((ValueError,monitor.ApiError)):
+                sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now+300)
+            with self.store.connection() as db:
+                self.assertEqual(float(db.execute('SELECT value FROM meta WHERE key=?',(sync.status_cursor_key(self.shop),)).fetchone()[0]),self.now)
+                self.assertEqual(db.execute('SELECT checked FROM profit_order_status_details').fetchone()[0],self.now)
+                self.assertEqual(core.load_order(db,1)['status'],'awaiting_packaging')
+
+    def test_missing_batch_record_is_not_deleted_or_claimed_verified(self):
+        self.capture(self.posting());self.cover();self.api.history=[]
+        self.api.details={'A-1':dict(self.posting(),status='delivering',substatus='posting_in_carriage')}
+        sync.refresh_orders(self.store,self.api,self.shop,'fbs',self.now)
+        self.assertEqual(self.api.calls[-1],('detail','fbs','A-1'))
+        with self.store.connection() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM profit_orders').fetchone()[0],1)
+            self.assertEqual(core.load_order(db,1)['status'],'delivering')
+
+    def test_older_status_request_does_not_overwrite_newer_refresh(self):
+        self.capture(self.posting())
+        with self.store.connection() as db:
+            sync.save_status(db,1,sync.status_values(dict(self.posting(),status='delivered')),self.now+300)
+            sync.save_status(db,1,sync.status_values(self.posting()),self.now)
+            sync.save_status_cursor(db,'test-cursor',self.now+300)
+            sync.save_status_cursor(db,'test-cursor',self.now)
+            self.assertEqual(core.load_order(db,1)['status'],'delivered')
+            self.assertEqual(float(db.execute("SELECT value FROM meta WHERE key='test-cursor'").fetchone()[0]),self.now+300)
 
     def test_invalid_detail_does_not_claim_success(self):
         self.capture(self.posting());self.cover()

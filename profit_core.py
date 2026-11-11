@@ -54,6 +54,7 @@ def money(value):
     return str(value.quantize(D('.01'), rounding=ROUND_HALF_UP)) if value is not None else None
 
 def ensure_schema(db):
+    db.execute('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL)')
     db.executescript('''
         CREATE TABLE IF NOT EXISTS profit_orders (
             id INTEGER PRIMARY KEY, shop TEXT NOT NULL, shop_name TEXT NOT NULL,
@@ -398,7 +399,9 @@ def capture_postings(db, shop, source, postings, now):
         except (ValueError, TypeError, AttributeError): created = now
         db.execute('''INSERT INTO profit_orders(shop,shop_name,posting,order_number,source,status,created,seen)
             VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(shop,posting) DO UPDATE SET
-            shop_name=excluded.shop_name,status=excluded.status,seen=excluded.seen''',
+            shop_name=excluded.shop_name,
+            status=COALESCE((SELECT top_status FROM profit_order_status_details
+                WHERE order_id=profit_orders.id),excluded.status),seen=MAX(profit_orders.seen,excluded.seen)''',
             (shop['id'],shop['name'],pnum,str(posting.get('order_number') or posting.get('order_id') or pnum),
              source,str(posting.get('status') or ''),created,now))
         order_id = db.execute('SELECT id FROM profit_orders WHERE shop=? AND posting=?',(shop['id'],pnum)).fetchone()[0]

@@ -97,6 +97,7 @@ def load_config(filename):
         "product_poll_seconds": 900, "order_push_seconds": 600, "product_digest_hour": 22,
         "order_overlap_seconds": 900,
         "profit_poll_seconds": 300, "profit_image_poll_seconds": 10,
+        "status_poll_seconds": 30,
     }
     for key, default in defaults.items():
         cfg.setdefault(key, default)
@@ -105,7 +106,8 @@ def load_config(filename):
               "max_pages": (1, 1000), "product_poll_seconds": (300, 86400),
               "order_push_seconds": (1, 3600), "product_digest_hour": (0, 23),
               "order_overlap_seconds": (300, 86400),
-              "profit_poll_seconds": (300, 3600), "profit_image_poll_seconds": (10, 86400)}
+              "profit_poll_seconds": (300, 3600), "profit_image_poll_seconds": (10, 86400),
+              "status_poll_seconds": (15, 300)}
     for key, (low, high) in limits.items():
         if type(cfg[key]) is not int or not low <= cfg[key] <= high:
             raise MonitorError(f"配置 {key} 必须为 {low}–{high} 的整数")
@@ -261,12 +263,16 @@ class Ozon:
             cursors.add(cursor)
         raise MonitorError("商品分页超过 max_pages；本轮没有更新基线")
 
-    def postings(self, source, since, until):
+    def postings(self, source, since, until, changed_since=None):
         path = "/v4/posting/fbs/list" if source == "fbs" else "/v3/posting/fbo/list"
+        filters = {"since": stamp(since), "to": stamp(until)}
+        if changed_since is not None:
+            if source != 'fbs': raise ValueError('Status change filter is only supported for FBS')
+            filters['last_changed_status_date'] = {'from': stamp(changed_since), 'to': stamp(until)}
         result, cursor, cursors = {}, "", set()
         for _ in range(self.max_pages):
             payload = {"sort_dir": "asc", "cursor": cursor,
-                       "filter": {"since": stamp(since), "to": stamp(until)},
+                       "filter": filters,
                        "limit": 100, "translit": False,
                        "with": {"analytics_data": False, "financial_data": False}}
             response = self.post(path, payload)
@@ -722,7 +728,9 @@ class Notifier:
 
 def poll(store, api, shop, source, cfg):
     now = time.time()
-    if source in ('profit_fbs','profit_fbo'):
+    if source=='profit_status_fbs':
+        profit_sync.refresh_fbs_statuses(store,api,shop,profit_sync.history_start(now),now)
+    elif source in ('profit_fbs','profit_fbo'):
         profit_sync.refresh_orders(store,api,shop,source.split('_',1)[1],now)
     elif source=='profit_images':
         profit_sync.refresh_images(store,api,shop,now)
@@ -753,6 +761,7 @@ def poll(store, api, shop, source, cfg):
 
 
 def job_interval(source,cfg):
+    if source=='profit_status_fbs': return cfg.get('status_poll_seconds',30)
     if source=='products': return cfg.get('product_poll_seconds',900)
     if source=='profit_images': return cfg.get('profit_image_poll_seconds',10)
     if source.startswith('profit_'): return cfg.get('profit_poll_seconds',300)
@@ -820,8 +829,8 @@ def run(cfg, store, transport):
     jobs = []
     for index, shop in enumerate(cfg["shops"]):
         api = Ozon(shop, transport, cfg["max_pages"])
-        for source in ("fbs", "fbo", "products", "profit_fbs", "profit_fbo", "profit_images"):
-            startup_delay=index*.2 if source=='profit_images' else index*2+{
+        for source in ("profit_status_fbs", "fbs", "fbo", "products", "profit_fbs", "profit_fbo", "profit_images"):
+            startup_delay=index+1 if source=='profit_status_fbs' else index*.2 if source=='profit_images' else index*2+{
                 "fbs":0,"fbo":5,"products":10,"profit_fbs":20,"profit_fbo":30}[source]
             jobs.append({"shop": shop, "source": source, "api": api, "future": None,
                          "interval": job_interval(source,cfg),
@@ -829,6 +838,7 @@ def run(cfg, store, transport):
     LOG.info("开始监控 %s 家店；订单每 %s 秒查询、每 %s 秒汇总；商品每 %s 秒采集，每天北京时间 %02d:00 汇总。",
              len(cfg["shops"]), cfg["poll_seconds"], cfg["order_push_seconds"],
              cfg["product_poll_seconds"], cfg["product_digest_hour"])
+    LOG.info('FBS状态每 %s 秒批量核对，独立轻量任务；保留账号限速及失败退避',cfg['status_poll_seconds'])
     if not cfg["pushplus"]["topic"]:
         LOG.warning("未配置 pushplus.topic：消息仅发给令牌所属用户，请建立私密群组让两人加入")
     if not cfg["pushplus"]["secret_key"]:
@@ -840,7 +850,8 @@ def run(cfg, store, transport):
     with concurrent.futures.ThreadPoolExecutor(max_workers=cfg["workers"]) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=1) as push_pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=1) as title_pool, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=2) as image_pool:
+            concurrent.futures.ThreadPoolExecutor(max_workers=2) as image_pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=2) as status_pool:
         while not stop.is_set():
             for job in jobs:
                 future = job["future"]
@@ -861,7 +872,7 @@ def run(cfg, store, transport):
                         LOG.warning("店铺 %s %s 查询失败；%s 秒后重试：%s",
                                     job["shop"]["name"], job["source"], delay, error)
                 if job["future"] is None and time.monotonic() >= job["due"]:
-                    worker=image_pool if job['source']=='profit_images' else pool
+                    worker=status_pool if job['source']=='profit_status_fbs' else image_pool if job['source']=='profit_images' else pool
                     job["future"] = worker.submit(poll, store, job["api"], job["shop"], job["source"], cfg)
                     job["due"] = time.monotonic() + job["interval"]
             if push_future is not None and push_future.done():
