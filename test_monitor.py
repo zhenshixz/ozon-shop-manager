@@ -307,8 +307,8 @@ class MonitorTests(unittest.TestCase):
 
     def test_quiet_hours_coalesce_night_orders_before_resuming_pushes(self):
         self.now = self.now - 12*3600
-        wake = self.now + 7*3600
-        cfg = {**PUSH,'quiet_end_hour':7,'order_push_seconds':600,'poll_seconds':300,'shops':[SHOP]}
+        wake = self.now + 8*3600
+        cfg = {**PUSH,'quiet_end_hour':8,'order_push_seconds':600,'poll_seconds':300,'shops':[SHOP]}
         client = FakePush()
         self.store.initialize_schedule(self.now-3600)
         with self.store.connection() as db:
@@ -324,7 +324,7 @@ class MonitorTests(unittest.TestCase):
 
         notifier.tick(wake)
         self.assertEqual(client.calls,[])
-        # The first post-07:00 poll may discover orders created before 07:00.
+        # The first post-08:00 poll may discover orders created before 08:00.
         for order_id,created in ((2,wake-5),(3,wake+15)):
             posting={'order_id':order_id,'posting_number':f'{order_id}-1','created_at':stamp(created)}
             self.store.orders_snapshot(SHOP,'fbs',[posting],wake+30,self.now)

@@ -14,7 +14,7 @@
     "secret_key": "",
     "min_send_interval_seconds": 13,
     "daily_request_budget": 180,
-    "quiet_end_hour": 7
+    "quiet_end_hour": 8
   },
   "shops": [
     {"id": "shop01", "name": "店铺1", "enabled": true, "client_id": "", "api_key": ""},
