@@ -10,6 +10,7 @@ import time
 from flask import Flask, request, session, jsonify, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 import profit_core as core
+import recent_sales
 import parcel_comparison
 import product_status
 
@@ -162,6 +163,7 @@ def create_app(settings=None):
         query+=' ORDER BY created DESC,id DESC LIMIT 500'
         with core.connection(database) as db:
             result=[core.load_order(db,r['id']) for r in db.execute(query,args).fetchall()]
+            recent_sales.annotate(db,result)
         search=request.args.get('q','').lower().strip()
         if search:
             result=[o for o in result if search in ' '.join([o['posting'],o['order_number'],o['shop_name']]+[l['name']+' '+l.get('name_zh','')+' '+l['offer_id'] for l in o['lines']]).lower()]

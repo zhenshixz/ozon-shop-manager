@@ -298,3 +298,5 @@
 @media(max-width:480px){.parcel-comparison>summary{gap:7px;padding:10px}.parcel-content{padding:0 10px 10px}.parcel-weights{gap:6px}}
 
 .sync-dialog{max-width:520px}.sync-selection{display:flex;gap:8px;margin:18px 0 12px}.sync-shops{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.sync-shop{display:flex;align-items:center;gap:10px;padding:14px;border:1px solid #dce5f1;border-radius:12px;cursor:pointer}.sync-shop:has(input:checked){border-color:#2563eb;background:#eff6ff}.sync-shop input{width:18px;height:18px;accent-color:#2563eb;margin:0}.sync-dialog .dialog-body{padding:22px}.sync-dialog .dialog-body p{margin-top:0}
+
+.recent-sales{display:inline-flex;align-items:center;gap:4px;margin-left:7px;padding:2px 7px;border-radius:5px;background:#eef6f5;color:#5e827c;font-size:10.5px;line-height:1.35;white-space:nowrap;font-variant-numeric:tabular-nums}.recent-sales b{color:#237565;font-size:11px;font-weight:650}.recent-sales>span{color:#8aa29e;font-size:10px}@media(max-width:650px){.recent-sales{margin-left:4px;padding:2px 5px;font-size:10px}}
