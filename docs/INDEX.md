@@ -10,6 +10,8 @@
 
 ## 最近的重要变更
 
+- [2026-11-11 妙手同步浏览器插件MVP：Chrome/Edge与线上小批核对](../MAINTENANCE-20261111-MIAOSHOU-EXTENSION-MVP.md)
+
 - [2026-11-11 订单推送汇总由10分钟改为20分钟](../MAINTENANCE-20261111-PUSH-TWENTY.md)
 
 - [2026-11-11 统一运营后台、超重排查及阈值次日生效](../MAINTENANCE-20261111-OPERATIONS-HUB.md)

@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "OZON 店铺助手 · 妙手同步 MVP",
+  "version": "0.1.0",
+  "description": "读取妙手当前页已显示的少量订单，发送到店铺助手核对采购价与整包重量。每批最多5笔，确认后更新。",
+  "minimum_chrome_version": "102",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://voice.xzbest.site/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html", "default_title": "读取妙手订单"},
+  "content_scripts": [{"matches": ["https://voice.xzbest.site/ozonzusou/purchase-sync/*"], "js": ["bridge.js"], "run_at": "document_idle"}]
+}

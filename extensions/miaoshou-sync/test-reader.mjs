@@ -1,0 +1,14 @@
+import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';import assert from 'node:assert/strict';
+const code=await readFile(new URL('./reader.js',import.meta.url),'utf8'),context=vm.createContext({});vm.runInContext(code,context);
+const parse=context.MiaoshouReader.parseCard;
+const text='[Ozon] Luo001 12345678-0001-1\n花坛0.9×0.9\n×2\n平台SKU: example-offer\nSKU ID:6169746567\n产品单价：CNY25.00\n采购金额：CNY31.07\n本地备注 854g';
+let r=parse(text);assert.equal(r.shop_name,'Luo001');assert.equal(r.quantity,'2');assert.equal(r.cost_total,'31.07');assert.equal(r.note,'854g');assert.equal(r.identity_error,'');
+r=parse(text.replace('31.07','0.00').replace('854g','11-11:2-2'));assert.equal(r.cost_total,'0.00');assert.ok(r.cost_note);assert.equal(r.note,'11-11:2-2');
+r=parse(text+'\n平台SKU: other-item\nSKU ID: 9999999999');assert.ok(r.identity_error.includes('多款'));
+r=parse(text.replace('×2','Title ×2'),['2']);assert.equal(r.quantity,'2');
+r=parse(text.replace('×2',''));assert.ok(r.identity_error.includes('数量'));
+r=parse(text.replace('CNY31.07','USD31.07'));assert.equal(r.cost_total,'');
+r=parse(text.replace('本地备注 854g','本地备注\n854g✎'));assert.equal(r.note,'854g');
+assert.ok(!JSON.stringify(parse(text+'\n收件人：Example\n联系电话：+7 9991234567')).includes('9991234567'));
+console.log('Reader checks passed: exact fields, zero cost, mixed SKU, inline quantity, currency, note and privacy');
