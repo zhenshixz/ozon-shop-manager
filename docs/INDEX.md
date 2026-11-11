@@ -10,6 +10,8 @@
 
 ## 最近的重要变更
 
+- [2026-11-11 订单推送汇总由10分钟改为20分钟](../MAINTENANCE-20261111-PUSH-TWENTY.md)
+
 - [2026-11-11 统一运营后台、超重排查及阈值次日生效](../MAINTENANCE-20261111-OPERATIONS-HUB.md)
 
 - [2026-11-11 运营后台入口与每日超重排查规划（尚未开发）](PLAN-20261111-OPERATIONS-HUB-OVERWEIGHT.md)

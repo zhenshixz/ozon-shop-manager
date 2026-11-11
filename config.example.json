@@ -1,7 +1,7 @@
 {
   "poll_seconds": 300,
   "product_poll_seconds": 900,
-  "order_push_seconds": 300,
+  "order_push_seconds": 1200,
   "product_digest_hour": 22,
   "order_overlap_seconds": 900,
   "workers": 3,
